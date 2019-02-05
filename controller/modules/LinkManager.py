@@ -85,7 +85,7 @@ class LinkManager(ControllerModule):
     def req_handler_add_ign_inf(self, cbt):
         ign_inf_details = cbt.request.params
         for olid in ign_inf_details:
-            self._ignored_net_interfaces[olid].add(ign_inf_details[olid])
+            self._ignored_net_interfaces[olid] = ign_inf_details[olid]
         cbt.set_response(None, True)
         self.complete_cbt(cbt)
 

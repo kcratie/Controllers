@@ -165,30 +165,6 @@ RESP = {
         }
     }
 }
-ADD_FORWARDING_RULE = {
-    "IPOP": {
-        "ProtocolVersion": 5,
-        "TransactionId": 0,
-        "ControlType": "TincanRequest",
-        "Request": {
-            "Command": "UpdateMap",
-            "OverlayId": "",
-            "Routes": []
-        }
-    }
-}
-DELETE_FORWARDING_RULE = {
-    "IPOP": {
-        "ProtocolVersion": 5,
-        "TransactionId": 0,
-        "ControlType": "TincanRequest",
-        "Request": {
-            "Command": "RemoveRoutes",
-            "OverlayId": "",
-            "Routes": []
-        }
-    }
-}
 CTL_QUERY_LINK_STATS = {
     "IPOP": {
         "ProtocolVersion": 5,
@@ -238,6 +214,12 @@ def mac_a2b(str_mac):
 def mac_b2a(bin_mac):
     return "".join("%02x" % int.from_bytes(bin_mac[i:i + 1], byteorder="big") + ":"
                    for i in range(0, 6, 1))[:-1]
+
+def delim_mac_str(mac_str, delim=":"):
+    if not mac_str:
+        return None
+    return str(mac_str[:2] + delim + mac_str[2:4] + delim + mac_str[4:6] + delim + mac_str[6:8] +
+               delim + mac_str[8:10] + delim + mac_str[10:12]).lower()
 
 def uid_a2b(str_uid):
     return int(str_uid, 16).to_bytes(20, byteorder="big")
