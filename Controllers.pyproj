@@ -11,7 +11,7 @@
     <OutputPath>.</OutputPath>
     <ProjectTypeGuids>{888888a0-9f3d-457c-b088-3a5042f75d52}</ProjectTypeGuids>
     <LaunchProvider>Standard Python launcher</LaunchProvider>
-    <InterpreterId>Global|PythonCore|3.5</InterpreterId>
+    <InterpreterId>Global|PythonCore|3.6</InterpreterId>
     <CommandLineArguments>-c ..\..\ipop-vpn\config\ipop-config.json</CommandLineArguments>
     <EnableNativeCodeDebugging>False</EnableNativeCodeDebugging>
     <InterpreterArguments>
@@ -37,6 +37,7 @@
     <Compile Include="controller\modules\GraphBuilder.py" />
     <Compile Include="controller\modules\NetworkBuilder.py" />
     <Compile Include="controller\modules\NetworkGraph.py" />
+    <Compile Include="controller\modules\RingRoute.py" />
     <Compile Include="controller\modules\SDNInterface.py" />
     <Compile Include="controller\modules\Topology.py" />
     <Compile Include="controller\modules\LinkManager.py" />
@@ -54,7 +55,7 @@
     <Folder Include="controller\modules" />
   </ItemGroup>
   <ItemGroup>
-    <InterpreterReference Include="Global|PythonCore|3.5" />
+    <InterpreterReference Include="Global|PythonCore|3.6" />
   </ItemGroup>
   <ItemGroup>
     <Content Include=".pylintrc" />

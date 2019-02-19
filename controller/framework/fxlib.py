@@ -80,7 +80,7 @@ CONFIG = {
         "TimerInterval": 60,
         "PeerDiscoveryCoalesce": 3,
         "MaxSuccessor": 1,
-        "MaxLongDistEdges": 4,
+        "MaxLongDistEdges": 2,
         "Dependencies": ["Logger", "TincanInterface", "LinkManager"]
     },
     "UsageReport": {

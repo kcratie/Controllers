@@ -23,7 +23,6 @@ import os
 import threading
 import uuid
 import time
-from collections import defaultdict
 from controller.framework.ControllerModule import ControllerModule
 
 
@@ -35,7 +34,7 @@ class LinkManager(ControllerModule):
         self._peers = {}     # maps overlay id to peers map, which maps peer id to link id
         self._lock = threading.Lock()  # serializes access to _overlays, _links
         self._link_updates_publisher = None
-        self._ignored_net_interfaces = defaultdict(set)
+        self._ignored_net_interfaces = dict()
 
     def __repr__(self):
         state = "<_peers: %s, _tunnels: %s>" % (self._peers, self._tunnels)
@@ -60,6 +59,7 @@ class LinkManager(ControllerModule):
             self._peers[olid] = dict()
 
         for overlay_id in self._cm_config["Overlays"]:
+            self._ignored_net_interfaces[overlay_id] = set()
             ol_cfg = self._cm_config["Overlays"][overlay_id]
             if "IgnoredNetInterfaces" in ol_cfg:
                 for ign_inf in ol_cfg["IgnoredNetInterfaces"]:
@@ -78,14 +78,13 @@ class LinkManager(ControllerModule):
                 ign_tap_names.add(
                     self._tunnels[tnlid]["Descriptor"]["TapName"])
         # Overlay_id is only used to selectively ignore physical interfaces and bridges
-        ign_tap_names \
-            |= self._ignored_net_interfaces[overlay_id]
+        ign_tap_names |= self._ignored_net_interfaces[overlay_id]
         return ign_tap_names
 
     def req_handler_add_ign_inf(self, cbt):
         ign_inf_details = cbt.request.params
         for olid in ign_inf_details:
-            self._ignored_net_interfaces[olid] = ign_inf_details[olid]
+            self._ignored_net_interfaces[olid] |= ign_inf_details[olid]
         cbt.set_response(None, True)
         self.complete_cbt(cbt)
 
@@ -153,15 +152,12 @@ class LinkManager(ControllerModule):
                     if data[tnl_id][lnkid]["Status"] == "OFFLINE":
                         # tincan indicates offline so recheck the link status
                         retry = self._tunnels[lnkid]["Link"].get("StatusRetry", 0)
-                        if retry < 3:
-                            retry = retry + 1
-                            self._tunnels[lnkid]["Link"]["StatusRetry"] = retry
-                        elif retry >= 2 and self._tunnels[lnkid]["TunnelState"] == "TNL_CREATING":
+                        if retry >= 2 and self._tunnels[lnkid]["TunnelState"] == "TNL_CREATING":
                             # link is stuck creating so destroy it
                             olid = self._tunnels[lnkid]["OverlayId"]
                             params = {"OverlayId": olid, "TunnelId": tnl_id, "LinkId": lnkid}
                             self.register_cbt("TincanInterface", "TCI_REMOVE_TUNNEL", params)
-                        elif retry >= 2 and self._tunnels[lnkid]["TunnelState"] == "TNL_QUERYING":
+                        elif retry >= 1 and self._tunnels[lnkid]["TunnelState"] == "TNL_QUERYING":
                             # link went offline so notify top
                             self._tunnels[lnkid]["TunnelState"] = "TNL_OFFLINE"
                             olid = self._tunnels[lnkid]["OverlayId"]
@@ -171,6 +167,8 @@ class LinkManager(ControllerModule):
                                 "TunnelId": lnkid, "LinkId": lnkid,
                                 "TapName": self._tunnels[lnkid]["Descriptor"]["TapName"]}
                             self._link_updates_publisher.post_update(param)
+                        else:
+                            self._tunnels[lnkid]["Link"]["StatusRetry"] = retry + 1
                     elif data[tnl_id][lnkid]["Status"] == "ONLINE":
                         self._tunnels[lnkid]["TunnelState"] = "TNL_ONLINE"
                         self._tunnels[lnkid]["Link"]["IceRole"] = data[tnl_id][lnkid]["IceRole"]
@@ -217,9 +215,12 @@ class LinkManager(ControllerModule):
     def req_handler_query_tunnels_info(self, cbt):
         results = {}
         for tnlid in self._tunnels:
-            results[tnlid] = {"OverlayId": self._tunnels[tnlid]["OverlayId"],
-                              "TunnelId": tnlid, "PeerId": self._tunnels[tnlid]["PeerId"],
-                              "Stats": self._tunnels[tnlid]["Link"]["Stats"]}
+            if self._tunnels[tnlid]["TunnelState"] == "TNL_ONLINE":
+                results[tnlid] = {"OverlayId": self._tunnels[tnlid]["OverlayId"],
+                                  "TunnelId": tnlid, "PeerId": self._tunnels[tnlid]["PeerId"],
+                                  "Stats": self._tunnels[tnlid]["Link"]["Stats"],
+                                  "MAC": self._tunnels[tnlid]["Descriptor"]["MAC"],
+                                  "PeerMac": self._tunnels[tnlid]["Descriptor"]["PeerMac"]}
         cbt.set_response(results, status=True)
         self.complete_cbt(cbt)
 
@@ -471,6 +472,9 @@ class LinkManager(ControllerModule):
                           .format(lnkid[:7]))
         # store the overlay data
         self._update_tunnel_descriptor(resp_data, lnkid)
+        # add the peer MAC to the tunnel descr
+        node_data = cbt.request.params["NodeData"]
+        self._tunnels[lnkid]["Descriptor"]["PeerMac"] = node_data["MAC"]
         self._tunnels[lnkid]["Link"]["CreationState"] = 0xB2
         # respond with this nodes connection parameters
         node_data = {
@@ -536,6 +540,8 @@ class LinkManager(ControllerModule):
                           .format(lnkid[:7]))
         node_data = rem_act["Data"]["NodeData"]
         olid = rem_act["OverlayId"]
+        # add the peer MAC to the tunnel descr
+        self._tunnels[lnkid]["Descriptor"]["PeerMac"] = node_data["MAC"]
         cbt_params = {"OverlayId": olid, "TunnelId": lnkid, "LinkId": lnkid, "Type": "TUNNEL",
                       "NodeData": {
                           "UID": node_data["UID"],
@@ -676,13 +682,15 @@ class LinkManager(ControllerModule):
                 lnk_status = self._tunnels[lnkid]["TunnelState"]
                 self._tunnels[lnkid]["TunnelState"] = "TNL_ONLINE"
                 if lnk_status != "TNL_QUERYING":
-                    # Do not post a notification if the the connection state was being queried
                     param = {
                         "UpdateType": "CONNECTED", "OverlayId": olid, "PeerId": peer_id,
                         "TunnelId": lnkid, "LinkId": lnkid, "ConnectedTimestamp": lts,
-                        "TapName": self._tunnels[lnkid]["Descriptor"]["TapName"]}
+                        "TapName": self._tunnels[lnkid]["Descriptor"]["TapName"],
+                        "MAC": self._tunnels[lnkid]["Descriptor"]["MAC"],
+                        "PeerMac": self._tunnels[lnkid]["Descriptor"]["PeerMac"]}
                     self._link_updates_publisher.post_update(param)
                 elif lnk_status == "TNL_QUERYING":
+                    # Do not post a notification if the the connection state was being queried
                     self._tunnels[lnkid]["Link"]["StatusRetry"] = 0
                 # if the lnk_status is TNL_OFFLINE the recconect event came in too late and the
                 # tear down has already been issued. This scenario is unlikely as the recheck time
@@ -713,7 +721,7 @@ class LinkManager(ControllerModule):
                 elif cbt.request.action == "LNK_REMOVE_TUNNEL":
                     self.req_handler_remove_tnl(cbt)
 
-                elif cbt.request.action == "LNK_QUERY_LINK_INFO":
+                elif cbt.request.action == "LNK_QUERY_TUNNEL_INFO":
                     self.req_handler_query_tunnels_info(cbt)
 
                 elif cbt.request.action == "VIS_DATA_REQ":

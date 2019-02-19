@@ -19,21 +19,27 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 # THE SOFTWARE.
 import time
-
-EdgeTypes = ["CETypeUnknown", "CETypeEnforced", "CETypeSuccessor", "CETypeLongDistance",
-             "CETypePredecessor", "CETypeIncoming"]
-EdgeStates = ["CEStateUnknown", "CEStateCreated", "CEStateConnected", "CEStateDisconnected"]
+try:
+    import simplejson as json
+except ImportError:
+    import json
+import struct
 
 class ConnectionEdge():
     """ A discriptor of the edge/link between two peers."""
+    _PACK_STR = '!16s16sff18s19s?'
+    _EdgeTypes = ["CETypeUnknown", "CETypeEnforced", "CETypeSuccessor", "CETypeLongDistance",
+                  "CETypePredecessor", "CETypeIncoming"]
+    _EdgeStates = ["CEStateUnknown", "CEStateCreated", "CEStateConnected", "CEStateDisconnected"]
+
     def __init__(self, peer_id=None, edge_type="CETypeUnknown"):
         self.peer_id = peer_id
         self.link_id = None
-        self.marked_for_delete = False
         self.created_time = time.time()
         self.connected_time = None
         self.edge_state = "CEStateUnknown"
         self.edge_type = edge_type
+        self.marked_for_delete = False
 
     def __key__(self):
         return int(self.peer_id, 16)
@@ -60,12 +66,53 @@ class ConnectionEdge():
         return hash(self.__key__())
 
     def __repr__(self):
-        msg = "<peer_id = %s, link_id = %s, marked_for_delete = %s, created_time = %s,"\
-               "state = %s, edge_type = %s>" % (self.peer_id, self.link_id, self.marked_for_delete,
-                                                str(self.created_time), self.edge_state,
-                                                self.edge_type)
+        msg = ("peer_id = %s, link_id = %s, created_time = %s, connected_time = %s, state = %s, "
+               "edge_type = %s, marked_for_delete = %s" %
+               (self.peer_id, self.link_id, str(self.created_time), str(self.connected_time),
+                self.edge_state, self.edge_type, self.marked_for_delete))
         #msg = "<peer_id = %s, edge_type = %s>" % (self.peer_id, self.edge_type)
         return msg
+
+    def __iter__(self):
+        yield("peer_id", self.peer_id)
+        yield("link_id", self.link_id)
+        yield("created_time", self.created_time)
+        yield("connected_time", self.connected_time)
+        yield("state", self.edge_state)
+        yield("edge_type", self.edge_type)
+        yield("marked_for_delete", self.marked_for_delete)
+
+    def serialize(self):
+        return struct.pack(ConnectionEdge._PACK_STR, self.peer_id, self.link_id, self.created_time,
+                           self.connected_time, self.edge_state, self.edge_type,
+                           self.marked_for_delete)
+
+    @classmethod
+    def from_bytes(cls, data):
+        ce = cls()
+        (ce.peer_id, ce.link_id, ce.created_time, ce.connected_time, ce.edge_state,
+         ce.edge_type, ce.marked_for_delete) = struct.unpack_from(cls._PACK_STR, data)
+        return ce
+
+    def to_json(self):
+        return json.dumps(dict(self))
+
+    #def to_json(self):
+    #    return json.dumps(dict(peer_id=self.peer_id, link_id=self.link_id,
+    #                           created_time=self.created_time, connected_time=self.connected_time,
+    #                           state=self.edge_state, edge_type=self.edge_type,
+    #                           marked_for_delete=self.marked_for_delete))
+    @classmethod
+    def from_json_str(cls, json_str):
+        ce = cls()
+        ce.peer_id = json_str["peer_id"]
+        ce.link_id = json_str["link_id"]
+        ce.created_time = json_str["created_time"]
+        ce.connected_time = json_str["connected_time"]
+        ce.edge_state = json_str["edge_state"]
+        ce.edge_type = json_str["edge_type"]
+        ce.marked_for_delete = json_str["marked_for_delete"]
+        return ce
 
 class ConnEdgeAdjacenctList():
     """ A series of ConnectionEdges that are incident on the local node"""

@@ -78,11 +78,9 @@ class SDNInterface(ControllerModule):
         olid = cbt.request.params["OverlayId"]
         if not olid in self._adj_lists:
             return # not tracking this overlay
-        adj_peers = cbt.request.params["Tunnels"]
         self.register_cbt("LinkManager", "LNK_QUERY_TUNNEL_INFO")
-        #self.register_cbt("BridgeController", "BRG_GET_BRIDGE_INFO")
         with self._lock:
-            self._adj_lists[olid]["Tunnels"] = adj_peers
+            self._adj_lists[olid] = cbt.request.params["Topology"]
         cbt.set_response(None, True)
         self.complete_cbt(cbt)
 
@@ -93,11 +91,12 @@ class SDNInterface(ControllerModule):
         resp_data = cbt.response.data
         with self._lock:
             for olid in self._adj_lists:
-                for tnlid in self._adj_lists[olid]["Tunnels"]:
-                    self._adj_lists[olid]["Tunnels"][tnlid]["MAC"] = ipoplib.delim_mac_str(
-                        resp_data[tnlid]["MAC"])
-                    self._adj_lists[olid]["Tunnels"][tnlid]["PeerMac"] = ipoplib.delim_mac_str(
-                    resp_data[tnlid]["PeerMac"])
+                for peer_id in self._adj_lists[olid]:
+                    tnlid = self._adj_lists[olid][peer_id].link_id
+                    self._adj_lists[olid][peer_id]["Mac"] = ipoplib.delim_mac_str(
+                        resp_data[tnlid]["MAC"]) # todo: handle tnlid not present
+                    self._adj_lists[olid][peer_id]["PeerMac"] = ipoplib.delim_mac_str(
+                        resp_data[tnlid]["PeerMac"])
         self.free_cbt(cbt)
 
     def process_cbt(self, cbt):
