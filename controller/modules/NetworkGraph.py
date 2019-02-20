@@ -66,8 +66,8 @@ class ConnectionEdge():
         return hash(self.__key__())
 
     def __repr__(self):
-        msg = ("peer_id = %s, link_id = %s, created_time = %s, connected_time = %s, state = %s, "
-               "edge_type = %s, marked_for_delete = %s" %
+        msg = ("ConnectionEdge<peer_id = %s, link_id = %s, created_time = %s, connected_time = %s,"
+               " state = %s, edge_type = %s, marked_for_delete = %s>" %
                (self.peer_id, self.link_id, str(self.created_time), str(self.connected_time),
                 self.edge_state, self.edge_type, self.marked_for_delete))
         #msg = "<peer_id = %s, edge_type = %s>" % (self.peer_id, self.edge_type)
@@ -78,7 +78,7 @@ class ConnectionEdge():
         yield("link_id", self.link_id)
         yield("created_time", self.created_time)
         yield("connected_time", self.connected_time)
-        yield("state", self.edge_state)
+        yield("edge_state", self.edge_state)
         yield("edge_type", self.edge_type)
         yield("marked_for_delete", self.marked_for_delete)
 
@@ -105,13 +105,14 @@ class ConnectionEdge():
     @classmethod
     def from_json_str(cls, json_str):
         ce = cls()
-        ce.peer_id = json_str["peer_id"]
-        ce.link_id = json_str["link_id"]
-        ce.created_time = json_str["created_time"]
-        ce.connected_time = json_str["connected_time"]
-        ce.edge_state = json_str["edge_state"]
-        ce.edge_type = json_str["edge_type"]
-        ce.marked_for_delete = json_str["marked_for_delete"]
+        jce = json.loads(json_str)
+        ce.peer_id = jce["peer_id"]
+        ce.link_id = jce["link_id"]
+        ce.created_time = jce["created_time"]
+        ce.connected_time = jce["connected_time"]
+        ce.edge_state = jce["edge_state"]
+        ce.edge_type = jce["edge_type"]
+        ce.marked_for_delete = jce["marked_for_delete"]
         return ce
 
 class ConnEdgeAdjacenctList():
@@ -130,8 +131,8 @@ class ConnEdgeAdjacenctList():
         return len(self.conn_edges)
 
     def __repr__(self):
-        msg = "<overlay_id = %s, node_id = %s, conn_edges = %s>"%(self.overlay_id,
-                                                                  self.node_id, self.conn_edges)
+        msg = "ConnEdgeAdjacenctList<overlay_id = %s, node_id = %s, conn_edges = %s>" \
+               %(self.overlay_id, self.node_id, self.conn_edges)
         return msg
 
     def add_connection_edge(self, ce):

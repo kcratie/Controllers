@@ -24,9 +24,6 @@ IPOP_VER_MNR = "02"
 IPOP_VER_REV = "01"
 IPOP_VER_REL = "{0}.{1}.{2}".format(IPOP_VER_MJR, IPOP_VER_MNR, IPOP_VER_REV)
 
-# set default config values
-MODULE_ORDER = ["CFx", "Logger", "OverlayVisualizer", "TincanInterface",
-                "Signal", "LinkManager", "Topology", "BridgeController", "UsageReport"]
 CONFIG = {
     "CFx": {
         "NodeId": "",  # Single unique node Id for all overlays
@@ -80,7 +77,7 @@ CONFIG = {
         "TimerInterval": 60,
         "PeerDiscoveryCoalesce": 3,
         "MaxSuccessor": 1,
-        "MaxLongDistEdges": 2,
+        "MaxLongDistEdges": 4,
         "Dependencies": ["Logger", "TincanInterface", "LinkManager"]
     },
     "UsageReport": {

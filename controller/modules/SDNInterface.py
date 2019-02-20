@@ -37,14 +37,18 @@ class SDNIRequestHandler(socketserver.BaseRequestHandler):
             return
         task = json.loads(data.decode("utf-8"))
         if task["Request"]["Action"] == "GetTunnels":
-            task["Response"] = dict(Status=True, Data=self.server.sdni.sdn_get_node_topo())
+            status = False
+            topo = self.server.sdni.sdn_get_node_topo()
+            if topo:
+                status = True
+            task["Response"] = dict(Status=status, Data=topo)
         elif task["Request"]["Action"] == "GetNodeId":
             task["Response"] = dict(Status=True,
                                     Data=dict(NodeId=str(self.server.sdni.sdn_get_node_id())))
         else:
             self.server.sdni.sdn_log("An unrecognized SDNI task request was discarded {0}".
                                      format(task), "LOG_WARNING")
-            task["Response"] = dict(Status=False, Data=None)
+            task["Response"] = dict(Status=False, Data="Unsupported request")
         self.request.sendall(bytes(json.dumps(task) + "\n", "utf-8"))
 
 class SDNITCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
@@ -71,7 +75,7 @@ class SDNInterface(ControllerModule):
                                                          name="SDNITCPServer")
             self._server_thread[olid].setDaemon(True)
             self._server_thread[olid].start()
-            self._adj_lists[olid] = dict(NodeId=self._cm_config["NodeId"])
+            self._adj_lists[olid] = dict()
         self.register_cbt("Logger", "LOG_INFO", "Module loaded")
 
     def req_handler_topology_change(self, cbt):
@@ -92,8 +96,8 @@ class SDNInterface(ControllerModule):
         with self._lock:
             for olid in self._adj_lists:
                 for peer_id in self._adj_lists[olid]:
-                    tnlid = self._adj_lists[olid][peer_id].link_id
-                    self._adj_lists[olid][peer_id]["Mac"] = ipoplib.delim_mac_str(
+                    tnlid = self._adj_lists[olid][peer_id]["link_id"]
+                    self._adj_lists[olid][peer_id]["MAC"] = ipoplib.delim_mac_str(
                         resp_data[tnlid]["MAC"]) # todo: handle tnlid not present
                     self._adj_lists[olid][peer_id]["PeerMac"] = ipoplib.delim_mac_str(
                         resp_data[tnlid]["PeerMac"])
