@@ -37,11 +37,7 @@ class SDNIRequestHandler(socketserver.BaseRequestHandler):
             return
         task = json.loads(data.decode("utf-8"))
         if task["Request"]["Action"] == "GetTunnels":
-            status = False
-            topo = self.server.sdni.sdn_get_node_topo()
-            if topo:
-                status = True
-            task["Response"] = dict(Status=status, Data=topo)
+            task = self._handle_get_topo(task)
         elif task["Request"]["Action"] == "GetNodeId":
             task["Response"] = dict(Status=True,
                                     Data=dict(NodeId=str(self.server.sdni.sdn_get_node_id())))
@@ -50,6 +46,14 @@ class SDNIRequestHandler(socketserver.BaseRequestHandler):
                                      format(task), "LOG_WARNING")
             task["Response"] = dict(Status=False, Data="Unsupported request")
         self.request.sendall(bytes(json.dumps(task) + "\n", "utf-8"))
+
+    def _handle_get_topo(self, task):
+        status = False
+        topo = self.server.sdni.sdn_get_node_topo()
+        if topo:
+            status = True
+        task["Response"] = dict(Status=status, Data=topo)
+        return task
 
 class SDNITCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
     def __init__(self, host_port_tuple, streamhandler, sdni):
