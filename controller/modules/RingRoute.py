@@ -22,15 +22,11 @@ try:
     import simplejson as json
 except ImportError:
     import json
-#from operator import attrgetter
 import socket
 import time
 import struct
 import uuid
-#import logging
-#import logging.handlers as lh
-from NetworkGraph import ConnectionEdge
-from NetworkGraph import ConnEdgeAdjacenctList
+import sys
 from ryu.base import app_manager
 from ryu.controller import ofp_event
 from ryu.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER, DEAD_DISPATCHER
@@ -40,8 +36,10 @@ from ryu.lib.packet import packet_base
 from ryu.lib.packet import packet
 from ryu.lib.packet import ethernet
 from ryu.lib import hub
-from ryu.topology import event, switches
-from ryu.topology.api import get_switch #, get_link
+from ryu.topology import event
+from ryu.topology.api import get_switch
+from NetworkGraph import ConnectionEdge
+from NetworkGraph import ConnEdgeAdjacenctList
 
 CONFIG = {
     "OverlayId": "101000F",
@@ -140,7 +138,7 @@ class netNode():
         recv_data = None
         sd = json.dumps(send_data)
         attempts = 0
-        while attempts < 2 :
+        while attempts < 2:
             try:
                 attempts += 1
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -166,7 +164,8 @@ class RingRoute(app_manager.RyuApp):
         self.mac_to_port = {}
         self.nodes = dict() # dict of ipop nodes indexed by datapath id
         self.monitor_thread = hub.spawn(self._monitor)
-        ethernet.ethernet.register_packet_type(BoundedFlood, BoundedFlood._ETH_TYPE_BF)
+        ethernet.ethernet.register_packet_type(frb, frb.ETH_TYPE_BF)
+        self.flooding_bounds = dict()
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def switch_features_handler(self, ev):
@@ -221,28 +220,41 @@ class RingRoute(app_manager.RyuApp):
 
         if eth.ethertype == 0xc0c0:
             self.logger.info("BoundedFlood pkt rcvd %s %s %s %s", datapath.id, eth.src, eth.dst,
-                              in_port)
+                             in_port)
             # learn a mac address to avoid FLOOD next time.
             self.mac_to_port[dpid][src] = in_port
             proto_bf = pkt.protocols[1]
             payload = pkt.protocols[2]
-            self.logger.info("bound_uid=%s", proto_bf.bound_uid)
+            self.logger.info("proto_frb=%s", proto_bf)
             self.logger.info("payload=%s", payload)
             # deliver to leaf devices
             for out_port in self.nodes[datapath.id].leaf_ports():
                 actions = [parser.OFPActionOutput(out_port)]
                 out = parser.OFPPacketOut(datapath=datapath, buffer_id=msg.buffer_id,
-                                    in_port=in_port, actions=actions, data=payload)
+                                          in_port=in_port, actions=actions, data=payload)
                 datapath.send_msg(out)
             # continue the bounded flood as necessary
-            out_bounds = self._build_out_bounds(proto_bf.bound_uid)
+            #out_bounds = self._build_out_bounds(proto_bf.root_nid, proto_bf.bound_nid, proto_bf.hop_count+1)
+            fld = self.flooding_bounds.get(dpid, None)
+            if not fld:
+                fld = FloodingBounds(self.nodes[dpid])
+                self.flooding_bounds[dpid] = fld
+            out_bounds = fld.bounds(proto_bf)
+            self.logger.info("flooding bounds calculated=%s:", out_bounds)
             if out_bounds:
                 self._do_bounded_flood(datapath, in_port, out_bounds, src, payload)
         elif self._is_brdcast_from_leaf(msg):
             self.logger.info("Brdcst from leaf rcvd")
             # learn a mac address to avoid FLOOD next time.
             self.mac_to_port[dpid][src] = in_port
-            out_bounds = self._build_out_bounds()
+
+            fld = self.flooding_bounds.get(dpid, None)
+            if not fld:
+                fld = FloodingBounds(self.nodes[dpid])
+                self.flooding_bounds[dpid] = fld
+            out_bounds = fld.bounds()
+            self.logger.info("flooding bounds calculated=%s:", out_bounds)
+            # out_bounds = self._build_out_bounds()
             if out_bounds:
                 self._do_bounded_flood(datapath, in_port, out_bounds, src, msg.data)
         elif dst in self.mac_to_port[dpid]:
@@ -391,7 +403,8 @@ class RingRoute(app_manager.RyuApp):
 
     def not_forwarded(self, src_mac, dpid, port_no):
         lnk = self.nodes[dpid].links[port_no]
-        if not lnk: return True
+        if not lnk:
+            return True
         peer_mac = lnk[1]
         return not str(src_mac).casefold() == peer_mac
 
@@ -412,9 +425,10 @@ class RingRoute(app_manager.RyuApp):
             for dpid in self.nodes:
                 msg += "{0}\n".format(self.nodes[dpid])
                 #self._request_stats(self.nodes[dpid].datapath)
+                msg += "Learning table{0}\n".format(str(self.mac_to_port))
             msg += str("<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<")
             self.logger.info(msg)
-            hub.sleep(30)
+            hub.sleep(60)
 
     def _is_brdcast_from_leaf(self, msg):
         pkt = packet.Packet(msg.data)
@@ -437,7 +451,7 @@ class RingRoute(app_manager.RyuApp):
         ingress is the recv port number of the brdcast
         tx_bounds is a list of tuples, each describing the outgoing port number and the
         corresponding bound UID associated with the transmission of 'payload' on that port.
-        (out_port, bound_uid)
+        (out_port, bound_nid)
 
         This method uses the custom EtherType 0xc0c0, an assumes it will not be used on the network
         for any other purpose.
@@ -450,9 +464,9 @@ class RingRoute(app_manager.RyuApp):
 
         eth = ethernet.ethernet(dst='ff:ff:ff:ff:ff:ff',
                                 src=src_mac,
-                                ethertype=BoundedFlood._ETH_TYPE_BF)
-        for out_port, bound_uid in tx_bounds:
-            bf = BoundedFlood(bound_uid)
+                                ethertype=frb.ETH_TYPE_BF)
+        for out_port, bf in tx_bounds:
+            #bf = frb(root_nid, bound_nid, hops)
             p = packet.Packet()
             p.add_protocol(eth)
             p.add_protocol(bf)
@@ -467,10 +481,12 @@ class RingRoute(app_manager.RyuApp):
             datapath.send_msg(out)
 
 
-    def _build_out_bounds(self, bound_nid=None):
+    def _build_out_bounds(self, root_nid=None, bound_nid=None, hops=1):
         out_bounds = []
         for dpid in self.nodes:
             node = self.nodes[dpid]
+            if not root_nid:
+                root_nid = node.node_id
             if not bound_nid:
                 bound_nid = node.node_id
             succ_nodes = node.topo.filter("CETypeSuccessor", "CEStateConnected")
@@ -483,7 +499,7 @@ class RingRoute(app_manager.RyuApp):
 
                 for prtno in node.links:
                     if node.links[prtno][2] == first_succ_id:
-                        out_bounds.append((prtno, bound_nid))
+                        out_bounds.append((prtno,root_nid, bound_nid, hops))
                         break
         self.logger.info("OutBounds calculated as %s:", out_bounds)
         return out_bounds
@@ -512,31 +528,86 @@ class RingRoute(app_manager.RyuApp):
     #            break
     #    return out_bounds
 ###################################################################################################
-class BoundedFlood(packet_base.PacketBase):
+class frb(packet_base.PacketBase):
     """
-    bound_uid is the ascii UUID representation of the upper exclusive node id bound that limits the
+    Flooding Route and Bound is an custom ethernet layer protocol used by IPOP SDN switching to
+    perform link layer broadcasts in cyclic switched fabrics.
+    bound_nid is the ascii UUID representation of the upper exclusive node id bound that limits the
     extent of the retransmission.
+    hop_count is the number of switching hops to the destination, the initial switch sets this
+    value to zero
+    root_nid is the node id of the switch that initiated the bounded flood operation
     """
-    _PACK_STR = '!16s'
+    _PACK_STR = '!16s16sB'
     _MIN_LEN = struct.calcsize(_PACK_STR)
-    _ETH_TYPE_BF = 0xc0c0
-    _TYPE = {
-        'ascii': [
-            'bound_uid'
-        ]
-    }
+    ETH_TYPE_BF = 0xc0c0
+    #_TYPE = {
+    #    "ascii": [
+    #        "root_nid",
+    #        "bound_nid",
+    #        "hop_count"
+    #    ]
+    #}
 
-    def __init__(self, bound_uid):
-        super(BoundedFlood, self).__init__()
-        self.bound_uid = bound_uid
+    def __init__(self, root_nid, bound_nid, hop_count):
+        super(frb, self).__init__()
+        self.root_nid = root_nid
+        self.bound_nid = bound_nid
+        self.hop_count = hop_count
 
+    def __repr__(self):
+        return str("frb<root_nid={0}, bound_nid={1}, hop_count={2}>"
+                   .format(self.root_nid,self.bound_nid, self.hop_count))
     @classmethod
     def parser(cls, buf):
-        #unpk_data = struct.unpack(cls._PACK_STR, buf)
-        #buid = uuid.UUID(bytes=unpk_data[0])
-        buid = uuid.UUID(bytes=buf[:16])
-        return cls(buid.hex), None, buf[BoundedFlood._MIN_LEN:]
+        unpk_data = struct.unpack(cls._PACK_STR, buf[:cls._MIN_LEN])
+        rid = uuid.UUID(bytes=unpk_data[0])
+        bid = uuid.UUID(bytes=unpk_data[1])
+        hops = unpk_data[2]
+        #rid = uuid.UUID(bytes=buf[:16])
+        #bid = uuid.UUID(bytes=buf[16:32])
+        #hops = int.from_bytes(buf[32:33], byteorder=sys.byteorder)
+        return cls(rid.hex, bid.hex, hops), None, buf[cls._MIN_LEN:]
 
     def serialize(self, payload, prev):
-        buid = uuid.UUID(hex=self.bound_uid).bytes
-        return struct.pack(BoundedFlood._PACK_STR, buid)
+        rid = uuid.UUID(hex=self.root_nid).bytes
+        bid = uuid.UUID(hex=self.bound_nid).bytes
+        return struct.pack(frb._PACK_STR, rid, bid, self.hop_count)
+
+class FloodingBounds():
+    def __init__(self, net_node):
+        self._root_nid = None
+        self._bound_nid = None
+        self._hops = None
+        self._node = net_node
+
+    def _build_out_bounds(self, prev):
+        out_bounds = []
+        root_nid = self._node.node_id
+        bound_nid = self._node.node_id
+        hops = 1
+        if prev:
+            root_nid = prev.root_nid
+            bound_nid = prev.bound_nid
+            hops = prev.hop_count + 1
+
+        succ_nodes = self._node.topo.filter("CETypeSuccessor", "CEStateConnected")
+        if succ_nodes:
+            succ_id_list = sorted([*succ_nodes.keys()])
+            first_succ_id = succ_id_list[0]
+
+            if bound_nid == first_succ_id:
+                return out_bounds
+
+            for prtno in self._node.links:
+                if self._node.links[prtno][2] == first_succ_id:
+                    out_bounds.append((prtno, frb(root_nid, bound_nid, hops)))
+                    break
+
+        return out_bounds
+
+    def bounds(self, prev_frb=None):
+        """
+        returns a list of tuples (outgress, frb_proto)
+        """
+        return self._build_out_bounds(prev_frb)
