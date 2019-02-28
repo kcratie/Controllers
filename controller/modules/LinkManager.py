@@ -459,15 +459,17 @@ class LinkManager(ControllerModule):
         # Create Link: Phase 4 Node B
         parent_cbt = cbt.parent
         resp_data = cbt.response.data
+        lnkid = cbt.request.params["LinkId"]
         if not cbt.response.status:
             self.free_cbt(cbt)
             parent_cbt.set_response(resp_data, False)
             if parent_cbt.child_count == 1:
                 self.complete_cbt(parent_cbt)
             self.register_cbt("Logger", "LOG_WARNING", "Create link endpoint failed :{}"
-                              .format(cbt.response.data))
+                                .format(cbt.response.data))
+            self._rollback_link_creation_changes(lnkid)
+
             return
-        lnkid = cbt.request.params["LinkId"]
         self.register_cbt("Logger", "LOG_DEBUG", "Create Link:{} Phase 2/4 Node B"
                           .format(lnkid[:7]))
         # store the overlay data
@@ -492,37 +494,6 @@ class LinkManager(ControllerModule):
         self.free_cbt(cbt)
         parent_cbt.set_response(data, True)
         self.complete_cbt(parent_cbt)
-
-    def _complete_link_creation(self, cbt, parent_cbt):
-        """
-        Complete the parent cbt to add the peers CAS and update link created subscription
-        """
-        # Create Link: Phase 8 Node B
-        rem_act = parent_cbt.request.params
-        lnkid = rem_act["LinkId"]
-        self._tunnels[lnkid]["Link"]["CreationState"] = 0xC0
-        self.register_cbt("Logger", "LOG_DEBUG", "Create Link:{} Phase 4/4 Node B"
-                          .format(lnkid[:7]))
-        peer_id = rem_act["NodeData"]["UID"]
-        olid = rem_act["OverlayId"]
-        resp_data = cbt.response.data
-        node_data = {
-            "MAC": resp_data["MAC"],
-            "FPR": resp_data["FPR"],
-            "UID": self._cm_config["NodeId"],
-            "CAS": resp_data["CAS"]
-        }
-        data = {
-            "OverlayId": cbt.request.params["OverlayId"],
-            "TunnelId": lnkid,
-            "LinkId": lnkid,
-            "NodeData": node_data
-        }
-        parent_cbt.set_response(data=data, status=True)
-        self.free_cbt(cbt)
-        self.complete_cbt(parent_cbt)
-        self.register_cbt("Logger", "LOG_INFO", "Tunnel {0} accepted: {1}:{2}<-{3}"
-                          .format(lnkid[:7], olid[:7], self._cm_config["NodeId"][:7], peer_id[:7]))
 
     def _create_link_endpoint(self, rem_act, parent_cbt):
         """
@@ -595,6 +566,37 @@ class LinkManager(ControllerModule):
         params["Type"] = self._cm_config["Overlays"][olid]["Type"]
         lcbt.set_request(self._module_name, "TincanInterface", "TCI_CREATE_LINK", params)
         self.submit_cbt(lcbt)
+
+    def _complete_link_creation(self, cbt, parent_cbt):
+        """
+        Complete the parent cbt to add the peers CAS and update link created subscription
+        """
+        # Create Link: Phase 8 Node B
+        rem_act = parent_cbt.request.params
+        lnkid = rem_act["LinkId"]
+        self._tunnels[lnkid]["Link"]["CreationState"] = 0xC0
+        self.register_cbt("Logger", "LOG_DEBUG", "Create Link:{} Phase 4/4 Node B"
+                          .format(lnkid[:7]))
+        peer_id = rem_act["NodeData"]["UID"]
+        olid = rem_act["OverlayId"]
+        resp_data = cbt.response.data
+        node_data = {
+            "MAC": resp_data["MAC"],
+            "FPR": resp_data["FPR"],
+            "UID": self._cm_config["NodeId"],
+            "CAS": resp_data["CAS"]
+        }
+        data = {
+            "OverlayId": cbt.request.params["OverlayId"],
+            "TunnelId": lnkid,
+            "LinkId": lnkid,
+            "NodeData": node_data
+        }
+        parent_cbt.set_response(data=data, status=True)
+        self.free_cbt(cbt)
+        self.complete_cbt(parent_cbt)
+        self.register_cbt("Logger", "LOG_INFO", "Tunnel {0} accepted: {1}:{2}<-{3}"
+                          .format(lnkid[:7], olid[:7], self._cm_config["NodeId"][:7], peer_id[:7]))
 
     def resp_handler_create_link_endpt(self, cbt):
         parent_cbt = cbt.parent
