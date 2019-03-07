@@ -70,7 +70,8 @@ class ConnectionEdge():
                " state = %s, edge_type = %s, marked_for_delete = %s>" %
                (self.peer_id, self.link_id, str(self.created_time), str(self.connected_time),
                 self.edge_state, self.edge_type, self.marked_for_delete))
-        #msg = "<peer_id = %s, edge_type = %s>" % (self.peer_id, self.edge_type)
+        #msg = ("ConnectionEdge<peer_id = %s, link_id = %s, state = %s, edge_type = %s>" %
+        #       (self.peer_id, self.link_id, self.edge_state, self.edge_type))
         return msg
 
     def __iter__(self):

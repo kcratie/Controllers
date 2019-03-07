@@ -26,7 +26,6 @@ import socket
 import time
 import struct
 import uuid
-import sys
 from ryu.base import app_manager
 from ryu.controller import ofp_event
 from ryu.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER, DEAD_DISPATCHER
@@ -181,7 +180,7 @@ class RingRoute(app_manager.RyuApp):
         match = parser.OFPMatch()
         actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER,
                                           ofproto.OFPCML_NO_BUFFER)]
-        self.add_flow(datapath, 0, match, actions)
+        self.add_flow(datapath, match, actions)
 
     @set_ev_cls(ofp_event.EventOFPPortStatus, MAIN_DISPATCHER)
     def port_status_handler(self, ev):
@@ -190,18 +189,15 @@ class RingRoute(app_manager.RyuApp):
         ofp = dp.ofproto
 
         if msg.reason == ofp.OFPPR_ADD:
-            reason = 'ADD'
+            self.logger.info("OFPPortStatus: port ADDED desc=%s" % msg.desc)
             self.update_net_node(dp)
         elif msg.reason == ofp.OFPPR_DELETE:
-            reason = 'DELETE'
-            self.mac_to_port[dp.id] = {}
+            self.logger.info("OFPPortStatus: port DELETED desc=%s" % msg.desc)
+            self.del_flow_outgress(dp, msg.desc.port_no)
+            #self.mac_to_port[dp.id] = {}
             self.update_net_node(dp)
         elif msg.reason == ofp.OFPPR_MODIFY:
-            reason = 'MODIFY'
-        else:
-            reason = 'unknown'
-
-        self.logger.debug('OFPPortStatus received: reason=%s desc=%s', reason, msg.desc)
+            self.logger.debug("OFPPortStatus: port MODIFIED desc=%s" % msg.desc)
 
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def _packet_in_handler(self, ev):
@@ -218,15 +214,28 @@ class RingRoute(app_manager.RyuApp):
         dpid = datapath.id
         self.mac_to_port.setdefault(dpid, {})
 
-        if eth.ethertype == 0xc0c0:
+        if self._is_brdcast_from_leaf(msg):
+            self.logger.info("Brdcst from leaf rcvd")
+            # learn a mac address to avoid FLOOD next time.
+            self.mac_to_port[dpid][src] = in_port
+            #perform bounded flood
+            fld = self.flooding_bounds.get(dpid, None)
+            if not fld:
+                fld = FloodingBounds(self.nodes[dpid])
+                self.flooding_bounds[dpid] = fld
+            out_bounds = fld.bounds()
+            self.logger.info("flooding bounds calculated=%s:", out_bounds)
+            if out_bounds:
+                self._do_bounded_flood(datapath, in_port, out_bounds, src, msg.data)
+        elif eth.ethertype == 0xc0c0:
             self.logger.info("BoundedFlood pkt rcvd %s %s %s %s", datapath.id, eth.src, eth.dst,
                              in_port)
             # learn a mac address to avoid FLOOD next time.
             self.mac_to_port[dpid][src] = in_port
+
             proto_bf = pkt.protocols[1]
             payload = pkt.protocols[2]
             self.logger.info("proto_frb=%s", proto_bf)
-            self.logger.info("payload=%s", payload)
             # deliver to leaf devices
             for out_port in self.nodes[datapath.id].leaf_ports():
                 actions = [parser.OFPActionOutput(out_port)]
@@ -234,7 +243,6 @@ class RingRoute(app_manager.RyuApp):
                                           in_port=in_port, actions=actions, data=payload)
                 datapath.send_msg(out)
             # continue the bounded flood as necessary
-            #out_bounds = self._build_out_bounds(proto_bf.root_nid, proto_bf.bound_nid, proto_bf.hop_count+1)
             fld = self.flooding_bounds.get(dpid, None)
             if not fld:
                 fld = FloodingBounds(self.nodes[dpid])
@@ -243,35 +251,22 @@ class RingRoute(app_manager.RyuApp):
             self.logger.info("flooding bounds calculated=%s:", out_bounds)
             if out_bounds:
                 self._do_bounded_flood(datapath, in_port, out_bounds, src, payload)
-        elif self._is_brdcast_from_leaf(msg):
-            self.logger.info("Brdcst from leaf rcvd")
-            # learn a mac address to avoid FLOOD next time.
-            self.mac_to_port[dpid][src] = in_port
-
-            fld = self.flooding_bounds.get(dpid, None)
-            if not fld:
-                fld = FloodingBounds(self.nodes[dpid])
-                self.flooding_bounds[dpid] = fld
-            out_bounds = fld.bounds()
-            self.logger.info("flooding bounds calculated=%s:", out_bounds)
-            # out_bounds = self._build_out_bounds()
-            if out_bounds:
-                self._do_bounded_flood(datapath, in_port, out_bounds, src, msg.data)
         elif dst in self.mac_to_port[dpid]:
             self.logger.info("packet in HIT %s %s %s %s", dpid, src, dst, in_port)
             # learn a mac address to avoid FLOOD next time.
             self.mac_to_port[dpid][src] = in_port
             out_port = self.mac_to_port[dpid][dst]
             actions = [parser.OFPActionOutput(out_port)]
-            match = parser.OFPMatch(in_port=in_port, eth_dst=dst, eth_src=src)
-            self.add_flow(datapath, 1, match, actions)
+            # match = parser.OFPMatch(in_port=in_port, eth_dst=dst, eth_src=src)
+            match = parser.OFPMatch(eth_dst=dst)
+            self.add_flow(datapath, match, actions, 1)
             if msg.buffer_id == ofproto.OFP_NO_BUFFER:
                 data = msg.data
             out = parser.OFPPacketOut(datapath=datapath, buffer_id=msg.buffer_id,
-                                in_port=in_port, actions=actions, data=data)
+                                      in_port=in_port, actions=actions, data=data)
             datapath.send_msg(out)
-        #else:
-        #    self.logger.info("default packet in %s %s %s %s", dpid, src, dst, in_port)
+        else:
+            self.logger.info("default packet in %s %s %s %s", dpid, src, dst, in_port)
 
     ###################################################################################
     """
@@ -391,22 +386,38 @@ class RingRoute(app_manager.RyuApp):
         self.nodes[dpid] = node
         return node
 
-    def add_flow(self, datapath, priority, match, actions):
-        ofproto = datapath.ofproto
-        parser = datapath.ofproto_parser
-
-        inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
-
-        mod = parser.OFPFlowMod(datapath=datapath, priority=priority,
-                                match=match, instructions=inst)
-        datapath.send_msg(mod)
-
     def not_forwarded(self, src_mac, dpid, port_no):
         lnk = self.nodes[dpid].links[port_no]
         if not lnk:
             return True
         peer_mac = lnk[1]
         return not str(src_mac).casefold() == peer_mac
+
+    def add_flow(self, datapath, match, actions, priority=0):
+        ofproto = datapath.ofproto
+        parser = datapath.ofproto_parser
+        inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
+        mod = parser.OFPFlowMod(datapath=datapath, priority=priority,
+                                match=match, instructions=inst)
+        datapath.send_msg(mod)
+
+    #def del_flow(self, datapath, priority, in_port, out_port):
+    #    ofproto = datapath.ofproto
+    #    parser = datapath.ofproto_parser
+    #    match = parser.OFPMatch(in_port=in_port)
+    #    mod = parser.OFPFlowMod(datapath=datapath, match=match, out_port=out_port, command=ofproto.OFPFC_DELETE)
+    #    datapath.send_msg(mod)
+
+    def del_flow_outgress(self, datapath, port_no):
+        ofproto=datapath.ofproto
+        parser=datapath.ofproto_parser
+        cmd = ofproto.OFPFC_DELETE
+        match=parser.OFPMatch()  #wildcard
+        mod = parser.OFPFlowMod(datapath=datapath, cookie=0, cookie_mask=0,
+                                table_id=ofproto.OFPTT_ALL, flags=ofproto.OFPFF_SEND_FLOW_REM,
+                                match=match, command=cmd, out_port=port_no)
+        self.logger.info("Deleting all flows on outgress %s" % port_no)
+        datapath.send_msg(mod)
 
     #def _request_stats(self, datapath):
     #    self.logger.info('send stats request: %016x', datapath.id)
@@ -479,31 +490,6 @@ class RingRoute(app_manager.RyuApp):
                                       in_port=ingress, actions=actions, data=p.data)
             self.logger.info("Doing bounded flood packet %s %s", datapath.id, out_port)
             datapath.send_msg(out)
-
-
-    def _build_out_bounds(self, root_nid=None, bound_nid=None, hops=1):
-        out_bounds = []
-        for dpid in self.nodes:
-            node = self.nodes[dpid]
-            if not root_nid:
-                root_nid = node.node_id
-            if not bound_nid:
-                bound_nid = node.node_id
-            succ_nodes = node.topo.filter("CETypeSuccessor", "CEStateConnected")
-            if succ_nodes:
-                succ_id_list = sorted([*succ_nodes.keys()])
-                first_succ_id = succ_id_list[0]
-
-                if bound_nid == first_succ_id:
-                    return out_bounds
-
-                for prtno in node.links:
-                    if node.links[prtno][2] == first_succ_id:
-                        out_bounds.append((prtno,root_nid, bound_nid, hops))
-                        break
-        self.logger.info("OutBounds calculated as %s:", out_bounds)
-        return out_bounds
-
 
     #def _build_out_bounds(self):
     #    out_bounds = []

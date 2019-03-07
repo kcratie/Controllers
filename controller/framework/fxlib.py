@@ -29,7 +29,7 @@ CONFIG = {
         "NodeId": "",  # Single unique node Id for all overlays
         "IpopVersion": IPOP_VER_REL,
         "Model": "Default",
-        "RequestTimeout": 29
+        "RequestTimeout": 29,
     },
     "Logger": {
         "Enabled": True,
@@ -76,20 +76,15 @@ CONFIG = {
         "Enabled": True,
         "TimerInterval": 60,
         "PeerDiscoveryCoalesce": 3,
-        "MaxSuccessor": 1,
-        "MaxLongDistEdges": 4,
         "Dependencies": ["Logger", "TincanInterface", "LinkManager"]
-    },
-    "UsageReport": {
-        "Enabled": False,
-        "TimerInterval": 200,
-        "ServerAddress": "metrics.ipop-project.org",
-        "ServerPort": 8081,
-        "Dependencies": ["Logger", "Signal"]
     },
     "BridgeController": {
         "Enabled": True,
         "Dependencies": ["Logger", "LinkManager"]
+    },
+    "SDNInterface": {
+        "Enabled": True,
+        "Dependencies": ["Logger", "Topology"]
     }
 }
 

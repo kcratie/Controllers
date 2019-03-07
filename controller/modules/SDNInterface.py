@@ -23,6 +23,7 @@ try:
 except ImportError:
     import json
 import threading
+import time
 import socketserver
 from controller.framework.ControllerModule import ControllerModule
 import controller.framework.ipoplib as ipoplib
@@ -68,6 +69,7 @@ class SDNInterface(ControllerModule):
         self._server_thread = dict()
         self._lock = threading.Lock()
         self._adj_lists = dict()
+        self._is_updating = False
 
     def initialize(self):
         self._cfx_handle.start_subscription("Topology", "TOP_TOPOLOGY_CHANGE")
@@ -88,6 +90,7 @@ class SDNInterface(ControllerModule):
             return # not tracking this overlay
         self.register_cbt("LinkManager", "LNK_QUERY_TUNNEL_INFO")
         with self._lock:
+            self._is_updating = True
             self._adj_lists[olid] = cbt.request.params["Topology"]
         cbt.set_response(None, True)
         self.complete_cbt(cbt)
@@ -97,14 +100,21 @@ class SDNInterface(ControllerModule):
             self.free_cbt(cbt)
             return
         resp_data = cbt.response.data
+        discard = []
         with self._lock:
             for olid in self._adj_lists:
                 for peer_id in self._adj_lists[olid]:
                     tnlid = self._adj_lists[olid][peer_id]["link_id"]
-                    self._adj_lists[olid][peer_id]["MAC"] = ipoplib.delim_mac_str(
-                        resp_data[tnlid]["MAC"]) # todo: handle tnlid not present
-                    self._adj_lists[olid][peer_id]["PeerMac"] = ipoplib.delim_mac_str(
-                        resp_data[tnlid]["PeerMac"])
+                    if not resp_data.get(tnlid, None):
+                        discard.append((olid, peer_id))
+                    else:
+                        self._adj_lists[olid][peer_id]["MAC"] = ipoplib.delim_mac_str(
+                            resp_data[tnlid]["MAC"])
+                        self._adj_lists[olid][peer_id]["PeerMac"] = ipoplib.delim_mac_str(
+                            resp_data[tnlid]["PeerMac"])
+            for olid, peer_id in discard:
+                self._adj_lists[olid].pop(peer_id)
+            self._is_updating = False
         self.free_cbt(cbt)
 
     def process_cbt(self, cbt):
@@ -140,5 +150,17 @@ class SDNInterface(ControllerModule):
         return self._cm_config["NodeId"]
 
     def sdn_get_node_topo(self):
-        with self._lock:
-            return self._adj_lists
+        tries = 0
+        topo = None
+        self._lock.acquire()
+        while self._is_updating and tries < 3:
+            tries += 1
+            self._lock.release()
+            time.sleep(1)
+            self._lock.acquire()
+        if tries == 3:
+            self._lock.release()
+            return topo
+        topo = self._adj_lists
+        self._lock.release()
+        return topo

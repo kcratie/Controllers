@@ -37,7 +37,7 @@ class LinkManager(ControllerModule):
         self._ignored_net_interfaces = dict()
 
     def __repr__(self):
-        state = "<_peers: %s, _tunnels: %s>" % (self._peers, self._tunnels)
+        state = "LinkManager<_peers: %s, _tunnels: %s>" % (self._peers, self._tunnels)
         return state
 
     def initialize(self):
@@ -180,6 +180,9 @@ class LinkManager(ControllerModule):
         self.free_cbt(cbt)
 
     def _cleanup_removed_tunnel(self, tnlid):
+        """
+        Remove the tunnel data.
+        """
         tnl = self._tunnels.pop(tnlid, None)
         if tnl:
             peer_id = tnl["PeerId"]
@@ -283,16 +286,6 @@ class LinkManager(ControllerModule):
         # Send the message via SIG server to peer
         self.submit_cbt(endp_cbt)
 
-    def _rollback_tnl_creation_changes(self, tnl_id):
-        """
-        Remove the tunnel that failed at some point while creating it.
-        """
-        tnl = self._tunnels.pop(tnl_id, None)
-        if tnl:
-            olid = tnl["OverlayId"]
-            peer_id = tnl["PeerId"]
-            self._peers[olid].pop(peer_id, None)
-
     def _rollback_link_creation_changes(self, link_id):
         """
         Removes links that failed the setup handshake. Does not currently complete pending CBTs.
@@ -358,7 +351,7 @@ class LinkManager(ControllerModule):
         lnkid = cbt.request.params["LinkId"]  # config overlay id
         resp_data = cbt.response.data
         if not cbt.response.status:
-            self._rollback_tnl_creation_changes(lnkid)
+            self._cleanup_removed_tunnel(lnkid)
             self.free_cbt(cbt)
             parent_cbt.set_response(resp_data, False)
             self.complete_cbt(parent_cbt)
@@ -466,7 +459,7 @@ class LinkManager(ControllerModule):
             if parent_cbt.child_count == 1:
                 self.complete_cbt(parent_cbt)
             self.register_cbt("Logger", "LOG_WARNING", "Create link endpoint failed :{}"
-                                .format(cbt.response.data))
+                              .format(cbt.response.data))
             self._rollback_link_creation_changes(lnkid)
 
             return

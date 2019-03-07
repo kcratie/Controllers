@@ -61,10 +61,7 @@ class Topology(ControllerModule, CFX):
         topo = {}
         for peer_id in adjl.conn_edges:
             if adjl.conn_edges[peer_id].edge_state == "CEStateConnected":
-                #lnkid = adjl.conn_edges[peer_id].link_id
-                #edge_type = adjl.conn_edges[peer_id].edge_type
-                topo.setdefault(peer_id, dict(adjl.conn_edges[peer_id]))
-                #topo.setdefault(peer_id, {"TunnelId":lnkid, "EdgeType": edge_type})
+                topo[peer_id] = dict(adjl.conn_edges[peer_id]) # create a dict from CE
         update = {"OverlayId": overlay_id, "Topology": topo}
         self._topo_changed_publisher.post_update(update)
 
@@ -116,8 +113,8 @@ class Topology(ControllerModule, CFX):
                     params = {"OverlayId": olid, "NodeId": self._cm_config["NodeId"],
                               "Peers": peer_list,
                               "EnforcedEdges": enf_lnks,
-                              "MaxSuccessors": self._cm_config.get("MaxSuccessors", 1),
-                              "MaxLongDistEdges": self._cm_config.get("MaxLongDistEdges", 4),
+                              "MaxSuccessors": self._cm_config["Overlays"][olid].get("MaxSuccessors", 1),
+                              "MaxLongDistEdges": self._cm_config["Overlays"][olid].get("MaxLongDistEdges", 2),
                               "ManualTopology": manual_topo}
                     gb = GraphBuilder(params)
                     adjl = gb.build_adj_list(nb.get_adj_list())
@@ -241,8 +238,8 @@ class Topology(ControllerModule, CFX):
             params = {"OverlayId": olid, "NodeId": self._cm_config["NodeId"],
                       "Peers": self._overlays[olid]["KnownPeers"],
                       "EnforcedEdges": enf_lnks,
-                      "MaxSuccessors": self._cm_config.get("MaxSuccessors", 1),
-                      "MaxLongDistEdges": self._cm_config.get("MaxLongDistEdges", 4),
+                      "MaxSuccessors": self._cm_config["Overlays"][olid].get("MaxSuccessors", 1),
+                      "MaxLongDistEdges": self._cm_config["Overlays"][olid].get("MaxLongDistEdges", 2),
                       "ManualTopology": manual_topo}
             gb = GraphBuilder(params)
             adjl = gb.build_adj_list(nb.get_adj_list())
