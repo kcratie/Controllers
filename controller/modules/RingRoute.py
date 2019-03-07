@@ -108,8 +108,8 @@ class netNode():
             if not topo:
                 self.ryu.logger.info("No IPOP Topo data available as yet")
                 return # nothing created in ipop as yet
-            self.topo.overlay_id = olid
-            self.topo.node_id = self.node_id
+            self.topo = ConnEdgeAdjacenctList(olid, self.node_id)
+            self.mac_local_to_peer.clear()
             for peer_id in topo:
                 ce = ConnectionEdge.from_json_str(json.dumps(topo[peer_id]))
                 self.topo.add_connection_edge(ce)
@@ -123,6 +123,7 @@ class netNode():
                                     self.node_id, self.datapath.id)
 
     def update_links(self):
+        self.links.clear()
         for prt in self.switch.ports:
             peer = self.mac_local_to_peer.get(prt.hw_addr, None)
             if peer:
@@ -257,8 +258,8 @@ class RingRoute(app_manager.RyuApp):
             self.mac_to_port[dpid][src] = in_port
             out_port = self.mac_to_port[dpid][dst]
             actions = [parser.OFPActionOutput(out_port)]
-            # match = parser.OFPMatch(in_port=in_port, eth_dst=dst, eth_src=src)
-            match = parser.OFPMatch(eth_dst=dst)
+            match = parser.OFPMatch(in_port=in_port, eth_dst=dst, eth_src=src)
+            #match = parser.OFPMatch(eth_dst=dst)
             self.add_flow(datapath, match, actions, 1)
             if msg.buffer_id == ofproto.OFP_NO_BUFFER:
                 data = msg.data
