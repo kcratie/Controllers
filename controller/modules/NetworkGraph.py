@@ -139,6 +139,9 @@ class ConnEdgeAdjacenctList():
     def add_connection_edge(self, ce):
         self.conn_edges[ce.peer_id] = ce
 
+    def remove_connection_edge(self, peer_id):
+        self.conn_edges.pop(peer_id, None)
+
     def get_edges(self, edge_type):
         conn_edges = {}
         for peer_id in self.conn_edges:

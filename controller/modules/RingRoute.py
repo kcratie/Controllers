@@ -35,7 +35,7 @@ from ryu.lib.packet import packet_base
 from ryu.lib.packet import packet
 from ryu.lib.packet import ethernet
 from ryu.lib import hub
-from ryu.topology import event
+from ryu.topology import event, switches
 from ryu.topology.api import get_switch
 from NetworkGraph import ConnectionEdge
 from NetworkGraph import ConnEdgeAdjacenctList
@@ -83,6 +83,12 @@ class netNode():
             self.ryu.logger.info("Updated node id %s", self.node_id)
         else:
             self.ryu.logger.warning("Get Node ID failed for {0}".format(self.datapath.id))
+
+    def query_port_no(self, node_id):
+        for prtno in self.links:
+            if self.links[prtno][2] == node_id:
+                return prtno
+        return None
 
     def update(self):
         self.ryu.logger.info("Updating node %s", self.node_id)
@@ -133,6 +139,19 @@ class netNode():
     def update_leaf_ports(self):
         self._leaf_prts = set([pt.port_no for pt in self.switch.ports]) - set([*self.links.keys()])
         self.ryu.logger.info("Updated leaf ports: %s", str(self._leaf_prts))
+
+    def delete_port(self, ofpport):
+        port_no = ofpport.port_no
+        self.ryu.logger.info("Deleting port %d info", port_no)
+        prt = switches.Port(self.datapath.id, self.datapath.ofproto, ofpport)
+        self.switch.ports.remove(prt)
+        td = self.links.get(port_no)
+        if td:
+            self.topo.remove_connection_edge(td[2])
+            self.mac_local_to_peer.pop(td[0], None)
+        self.links.pop(port_no, None)
+        self.update_leaf_ports()
+        self.ryu.logger.info("NetNode=%s", self)
 
     def _send_recv(self, host_addr, send_data):
         recv_data = None
@@ -190,15 +209,15 @@ class RingRoute(app_manager.RyuApp):
         ofp = dp.ofproto
 
         if msg.reason == ofp.OFPPR_ADD:
-            self.logger.info("OFPPortStatus: port ADDED desc=%s" % msg.desc)
+            self.logger.info("OFPPortStatus: port ADDED desc=%s", msg.desc)
             self.update_net_node(dp)
         elif msg.reason == ofp.OFPPR_DELETE:
-            self.logger.info("OFPPortStatus: port DELETED desc=%s" % msg.desc)
+            self.logger.info("OFPPortStatus: port DELETED desc=%s", msg.desc)
             self.del_flow_outgress(dp, msg.desc.port_no)
-            #self.mac_to_port[dp.id] = {}
-            self.update_net_node(dp)
+            self.net_node_del_port(dp, msg.desc)
+            ##self.mac_to_port[dp.id] = {}
         elif msg.reason == ofp.OFPPR_MODIFY:
-            self.logger.debug("OFPPortStatus: port MODIFIED desc=%s" % msg.desc)
+            self.logger.debug("OFPPortStatus: port MODIFIED desc=%s", msg.desc)
 
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def _packet_in_handler(self, ev):
@@ -268,7 +287,7 @@ class RingRoute(app_manager.RyuApp):
             datapath.send_msg(out)
         else:
             self.logger.info("default packet in %s %s %s %s", dpid, src, dst, in_port)
-
+            self.mac_to_port[dpid][src] = in_port
     ###################################################################################
     """
     The event EventSwitchEnter will trigger the activation of get_topology_data().
@@ -301,8 +320,10 @@ class RingRoute(app_manager.RyuApp):
     #@set_ev_cls(event.EventPortDelete)
     #def port_delete_handler(self, ev):
     #    dpid = ev.port.dpid
-    #    self.logger.info(ev)
-    #    self._update_adjacent_peers(dpid)
+    #    dp = self.nodes[dpid].datapath
+    #    self.logger.info("EventPortDelete: event=%s", ev)
+    #    self.del_flow_outgress(dp, ev.port.port_no)
+    #    self.update_net_node(dp)
 
     #@set_ev_cls(event.EventPortModify)
     #def port_modify_handler(self, ev):
@@ -387,12 +408,12 @@ class RingRoute(app_manager.RyuApp):
         self.nodes[dpid] = node
         return node
 
-    def not_forwarded(self, src_mac, dpid, port_no):
-        lnk = self.nodes[dpid].links[port_no]
-        if not lnk:
-            return True
-        peer_mac = lnk[1]
-        return not str(src_mac).casefold() == peer_mac
+    def net_node_del_port(self, datapath, ofpport):
+        dpid = datapath.id
+        node = self.nodes.get(dpid, None)
+        if not node:
+            node = netNode(datapath, self)
+        node.delete_port(ofpport)
 
     def add_flow(self, datapath, match, actions, priority=0):
         ofproto = datapath.ofproto
@@ -402,22 +423,15 @@ class RingRoute(app_manager.RyuApp):
                                 match=match, instructions=inst)
         datapath.send_msg(mod)
 
-    #def del_flow(self, datapath, priority, in_port, out_port):
-    #    ofproto = datapath.ofproto
-    #    parser = datapath.ofproto_parser
-    #    match = parser.OFPMatch(in_port=in_port)
-    #    mod = parser.OFPFlowMod(datapath=datapath, match=match, out_port=out_port, command=ofproto.OFPFC_DELETE)
-    #    datapath.send_msg(mod)
-
     def del_flow_outgress(self, datapath, port_no):
-        ofproto=datapath.ofproto
-        parser=datapath.ofproto_parser
+        ofproto = datapath.ofproto
+        parser = datapath.ofproto_parser
         cmd = ofproto.OFPFC_DELETE
-        match=parser.OFPMatch()  #wildcard
+        match = parser.OFPMatch()  #wildcard
         mod = parser.OFPFlowMod(datapath=datapath, cookie=0, cookie_mask=0,
                                 table_id=ofproto.OFPTT_ALL, flags=ofproto.OFPFF_SEND_FLOW_REM,
                                 match=match, command=cmd, out_port=port_no)
-        self.logger.info("Deleting all flows on outgress %s" % port_no)
+        self.logger.info("Deleting all flows on outgress %s", port_no)
         datapath.send_msg(mod)
 
     #def _request_stats(self, datapath):
@@ -544,7 +558,7 @@ class frb(packet_base.PacketBase):
 
     def __repr__(self):
         return str("frb<root_nid={0}, bound_nid={1}, hop_count={2}>"
-                   .format(self.root_nid,self.bound_nid, self.hop_count))
+                   .format(self.root_nid, self.bound_nid, self.hop_count))
     @classmethod
     def parser(cls, buf):
         unpk_data = struct.unpack(cls._PACK_STR, buf[:cls._MIN_LEN])
@@ -562,39 +576,147 @@ class frb(packet_base.PacketBase):
         return struct.pack(frb._PACK_STR, rid, bid, self.hop_count)
 
 class FloodingBounds():
+    _MAX_NID = "ffffffffffffffffffffffffffffffff"
     def __init__(self, net_node):
         self._root_nid = None
         self._bound_nid = None
         self._hops = None
-        self._node = net_node
+        self._net_node = net_node
 
-    def _build_out_bounds(self, prev):
-        out_bounds = []
-        root_nid = self._node.node_id
-        bound_nid = self._node.node_id
+    def _build_frb(self, peer1, peer2, prev_frb=None):
+        """
+        Create a FRB class for the broadbcast to peer1_idx. Assumes a list of adjacent nodes with
+        lager NIDs, sorted in ascending order. The caller must handle wrap around of peers in the
+        ring.
+        peer1    - the peer in node list for which frb must be determined. NID must be greater than
+                   self NID.
+        peer2    - the next greater node immediately following peer1 in node list
+        prev_frb - the FRB on the received Bounded Flood. If a broadcast was initiated by a leaf
+                   node this value is None.
+        """
+        if (self._net_node.node_id >= peer1) or (peer2 and (peer1 >= peer2)):
+            raise ValueError("invalid NID ordering self<%s>, peer1<%s>, peer2<%s>"%
+                             self._net_node.node_id, peer1, peer2)
+        if not prev_frb:
+            return self._build_leaf_frb(peer2)
+        root_nid = self._net_node.node_id
         hops = 1
-        if prev:
-            root_nid = prev.root_nid
-            bound_nid = prev.bound_nid
-            hops = prev.hop_count + 1
+        bound_nid = FloodingBounds._MAX_NID # if no prev_frb init to max value
+        if prev_frb:
+            root_nid = prev_frb.root_nid
+            hops = prev_frb.hop_count + 1
+            bound_nid = prev_frb.bound_nid # use the prev_frb bound_nid if it exists
 
-        succ_nodes = self._node.topo.filter("CETypeSuccessor", "CEStateConnected")
-        if succ_nodes:
-            succ_id_list = sorted([*succ_nodes.keys()])
-            first_succ_id = succ_id_list[0]
+        if (bound_nid < self._net_node.node_id) and (bound_nid < peer1):
+            # the prev_frb contained a bound to a wrap aound nNID which is smaller than ours.
+            if peer2 is None:
+                return frb(root_nid, bound_nid, hops)
+            else:
+                bound_nid = peer2
+                return frb(root_nid, bound_nid, hops)
+        elif (bound_nid > self._net_node.node_id) and (peer1 >= bound_nid):
+            return None # the peer being considered is beyond the bound
+        elif not peer2:
+            bound_nid = prev_frb.bound_nid # alread set in default, handling no peer2
+        elif peer2 < bound_nid:
+            # the bound NID is the lesser of the bounds, ie., the bound_nid in the received frb,
+            # or the NID of the next adjacent peer.
+            bound_nid = peer2
+        return frb(root_nid, bound_nid, hops)
 
-            if bound_nid == first_succ_id:
-                return out_bounds
+    def _build_leaf_frb(self, peer2):
+        """
+        Creates FRB in scenario where the brdcast originated from a leaf node and there is no
+        prev_frb.
+        """
+        root_nid = self._net_node.node_id
+        hops = 1
+        bound_nid = FloodingBounds._MAX_NID # if no prev_frb init to max value
+        if peer2 is None:
+            bound_nid = self._net_node.node_id
+        elif peer2 < bound_nid:
+            bound_nid = peer2
+        return frb(root_nid, bound_nid, hops)
 
-            for prtno in self._node.links:
-                if self._node.links[prtno][2] == first_succ_id:
-                    out_bounds.append((prtno, frb(root_nid, bound_nid, hops)))
-                    break
+    def _build_succ_frb(self, succ_nid, prev_frb):
+        """
+        Used when all adj peers have a lower nid, ie, both peer1 and peer 2 are None. In this case
+        we expect wrap around to determine the successor as the node with the smallest NID.
+        """
+        root_nid = self._net_node.node_id
+        hops = 1
+        bound_nid = self._net_node.node_id # if no prev_frb init to max value
+        if prev_frb:
+            root_nid = prev_frb.root_nid
+            hops = prev_frb.hop_count + 1
+            bound_nid = prev_frb.bound_nid # use the prev_frb bound_nid if it exists
+        if succ_nid == bound_nid:
+            return None
+        return frb(root_nid, bound_nid, hops)
 
-        return out_bounds
 
     def bounds(self, prev_frb=None):
         """
-        returns a list of tuples (outgress, frb_proto)
+        Creates a list of out_bound tuples, in the format (outgress, frb).
         """
-        return self._build_out_bounds(prev_frb)
+        out_bounds = []
+        node_list = []
+        node_list = [*self._net_node.topo.conn_edges.keys()]
+        node_list.append(self._net_node.node_id)
+        node_list.sort()
+        idx = node_list.index(self._net_node.node_id)
+        num_peers = len(node_list)
+        # prev_i = (idx + num_peers - 1) % num_peers # ring wraps around
+        greater_peers = node_list[idx+1:]
+        if not greater_peers:
+            succ_i = (idx + 1) % num_peers
+            nid = node_list[succ_i]
+            frb_hdr = self._build_succ_frb(nid, prev_frb)
+            if frb_hdr:
+                prtno = self._net_node.query_port_no(nid)
+                if prtno:
+                    out_bounds.append((prtno, frb_hdr))
+            return out_bounds
+
+        for i, nid in enumerate(greater_peers):
+            peer2 = None # default val when i is last node in list
+            if i+1 <= len(greater_peers) - 1:
+                peer2 = greater_peers[i+1]
+            frb_hdr = self._build_frb(nid, peer2, prev_frb)
+            if not frb_hdr:
+                continue
+            prtno = self._net_node.query_port_no(nid)
+            if prtno:
+                out_bounds.append((prtno, frb_hdr))
+        return out_bounds
+
+    #def _build_scc_out_bounds(self, prev):
+    #    out_bounds = []
+    #    root_nid = self._net_node.node_id
+    #    bound_nid = self._net_node.node_id
+    #    hops = 1
+    #    if prev:
+    #        root_nid = prev.root_nid
+    #        bound_nid = prev.bound_nid
+    #        hops = prev.hop_count + 1
+
+    #    succ_nodes = self._net_node.topo.filter("CETypeSuccessor", "CEStateConnected")
+    #    if succ_nodes:
+    #        succ_id_list = sorted([*succ_nodes.keys()])
+    #        first_succ_id = succ_id_list[0]
+
+    #        if bound_nid == first_succ_id:
+    #            return out_bounds
+
+    #        for prtno in self._net_node.links:
+    #            if self._net_node.links[prtno][2] == first_succ_id:
+    #                out_bounds.append((prtno, frb(root_nid, bound_nid, hops)))
+    #                break
+
+    #    return out_bounds
+
+    #def succ_bounds(self, prev_frb=None):
+    #    """
+    #    returns a list of tuples (outgress, frb_proto)
+    #    """
+    #    return self._build_scc_out_bounds(prev_frb)
