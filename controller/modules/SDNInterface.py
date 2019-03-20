@@ -42,6 +42,12 @@ class SDNIRequestHandler(socketserver.BaseRequestHandler):
         elif task["Request"]["Action"] == "GetNodeId":
             task["Response"] = dict(Status=True,
                                     Data=dict(NodeId=str(self.server.sdni.sdn_get_node_id())))
+        elif task["Request"]["Action"] == "TunnelRquest":
+            task["Response"] = dict(Status=True,
+                                    Data="Request shall be considered")
+            self.server.sdni.sdn_tunnel_request((task["Request"]["OverlayId"],
+                                                 task["Request"]["PeerId"],
+                                                 task["Request"]["Operation"])) # op is ADD/REMOVE
         else:
             self.server.sdni.sdn_log("An unrecognized SDNI task request was discarded {0}".
                                      format(task), "LOG_WARNING")
@@ -74,9 +80,9 @@ class SDNInterface(ControllerModule):
     def initialize(self):
         self._cfx_handle.start_subscription("Topology", "TOP_TOPOLOGY_CHANGE")
         for olid in self._cm_config["Overlays"]:
-            self._server[olid] = SDNITCPServer((self._cm_config["Overlays"][olid]["SdnListenAddress"],
-                                                self._cm_config["Overlays"][olid]["SdnListenPort"]),
-                                               SDNIRequestHandler, self)
+            self._server[olid] = SDNITCPServer(
+                (self._cm_config["Overlays"][olid]["SdnListenAddress"],
+                 self._cm_config["Overlays"][olid]["SdnListenPort"]), SDNIRequestHandler, self)
             self._server_thread[olid] = threading.Thread(target=self._server[olid].serve_forever,
                                                          name="SDNITCPServer")
             self._server_thread[olid].setDaemon(True)
@@ -164,3 +170,6 @@ class SDNInterface(ControllerModule):
         topo = self._adj_lists
         self._lock.release()
         return topo
+
+    def sdn_tunnel_request(self, peer):
+        self.register_cbt("Topology", "TOP_REQUEST_OND_TUNNEL", peer)

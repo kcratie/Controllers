@@ -116,7 +116,22 @@ class GraphBuilder():
             else:
                 return
 
-    def build_adj_list(self, transition_adj_list):
+    def _build_ondemand_links(self, adj_list, request_list, transition_adj_list):
+        tmp = []
+        for peer_id, op in request_list:
+            if op == "ADD":
+                if peer_id in self._peers and (peer_id not in adj_list or
+                                               peer_id not in transition_adj_list):
+                    ce = ConnectionEdge(peer_id, "CETypeOnDemand")
+                    adj_list.add_connection_edge(ce)
+                    tmp.append(peer_id)
+            elif op == "REMOVE":
+                if peer_id in adj_list and adj_list[peer_id].edge_type == "CETypeOnDemand":
+                    adj_list.pop(peer_id)
+        for peer_id in tmp:
+            request_list.pop(peer_id)
+
+    def build_adj_list(self, transition_adj_list, request_list=None):
         adj_list = ConnEdgeAdjacenctList(self.overlay_id, self._node_id,
                                          dict(MaxSuccessors=self._max_successors,
                                               MaxLongDistEdges=self._max_ldl_cnt))
@@ -124,6 +139,8 @@ class GraphBuilder():
         if not self._manual_topo:
             self._build_successors(adj_list)
             self._build_long_dist_links(adj_list, transition_adj_list)
+            if request_list:
+                self._build_ondemand_links(adj_list, request_list, transition_adj_list)
         adj_list.validate()
         return adj_list
 

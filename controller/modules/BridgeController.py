@@ -34,12 +34,13 @@ class BridgeABC():
     bridge_type = NotImplemented
     iptool = spawn.find_executable("ip")
 
-    def __init__(self, name, ip_addr, prefix_len, mtu):
+    def __init__(self, name, ip_addr, prefix_len, mtu, cm):
         self.name = name
         self.ip_addr = ip_addr
         self.prefix_len = prefix_len
         self.mtu = mtu
         self.ports = set()
+        self.cm = cm
 
     @abstractmethod
     def add_port(self, port_name):
@@ -71,31 +72,27 @@ class OvsBridge(BridgeABC):
     brctl = spawn.find_executable("ovs-vsctl")
     bridge_type = "OVS"
 
-    def __init__(self, name, ip_addr, prefix_len, mtu, stp_enable, sdn_ctrl_cfg=None):
+    def __init__(self, name, ip_addr, prefix_len, mtu, cm, stp_enable, sdn_ctrl_cfg=None):
         """ Initialize an OpenvSwitch bridge object. """
-        super(OvsBridge, self).__init__(name, ip_addr, prefix_len, mtu)
+        super(OvsBridge, self).__init__(name, ip_addr, prefix_len, mtu, cm)
         if OvsBridge.brctl is None or OvsBridge.iptool is None:
             raise RuntimeError("openvswitch-switch was not found" if not OvsBridge.brctl else
                                "iproute2 was not found")
         self._patch_port = self.name[:3]+"-pp0"
         ipoplib.runshell([OvsBridge.brctl, "--may-exist", "add-br", self.name])
 
-        # try:
-        #    p = ipoplib.runshell([OvsBridge.brctl, "set", "int",
-        #                             self.name,
-        #                             "mtu_request=" + str(self.mtu)])
-        # except RuntimeError as e:
-        #    pass
-        # self.register_cbt(
-        # "Logger", "LOG_WARN", "Following error occurred while"
-        # " setting MTU for OVS bridge: " + e.message
-        # + ". Proceeding with OVS-specified default"
-        # " value for the bridge...")
 
         if ip_addr and prefix_len:
             net = "{0}/{1}".format(ip_addr, prefix_len)
             ipoplib.runshell([OvsBridge.iptool, "addr", "flush", "dev", self.name])
             ipoplib.runshell([OvsBridge.iptool, "addr", "add", net, "dev", self.name])
+
+        try:
+            ipoplib.runshell([OvsBridge.brctl, "set", "int", self.name,
+                                  "mtu_request=" + str(self.mtu)])
+        except RuntimeError as e:
+            self.cm.register_cbt("Logger", "LOG_WARN", "The following error occurred while setting "
+                              "MTU for OVS bridge: {0}".format(e))
 
         self.stp(stp_enable)
         ipoplib.runshell([OvsBridge.iptool, "link", "set", "dev", self.name, "up"])
@@ -159,9 +156,9 @@ class LinuxBridge(BridgeABC):
     brctl = spawn.find_executable("brctl")
     bridge_type = "LXBR"
 
-    def __init__(self, name, ip_addr, prefix_len, mtu, stp_enable):
+    def __init__(self, name, ip_addr, prefix_len, mtu, cm, stp_enable):
         """ Initialize a Linux bridge object. """
-        super(LinuxBridge, self).__init__(name, ip_addr, prefix_len, mtu)
+        super(LinuxBridge, self).__init__(name, ip_addr, prefix_len, mtu, cm)
         if LinuxBridge.brctl is None or LinuxBridge.iptool is None:
             raise RuntimeError("bridge-utils was not found" if not LinuxBridge.brctl else
                                "iproute2 was not found")
@@ -240,17 +237,16 @@ class BridgeController(ControllerModule):
                 self._overlays[olid] = LinuxBridge(br_cfg["BridgeName"][:8] + olid[:7],
                                                    br_cfg["IP4"],
                                                    br_cfg["PrefixLen"],
-                                                   br_cfg.get("MTU", 1410),
+                                                   br_cfg.get("MTU", 1410), self,
                                                    br_cfg.get("STP", True))
 
             elif self._cm_config["Overlays"][olid]["Type"] == OvsBridge.bridge_type:
                 self._overlays[olid] = OvsBridge(br_cfg["BridgeName"][:8] + olid[:7],
                                                  None,
                                                  None,
-                                                 br_cfg.get("MTU", 1410),
+                                                 br_cfg.get("MTU", 1410), self,
                                                  br_cfg.get("STP", True),
-                                                 sdn_ctrl_cfg=br_cfg.get("SDNController",
-                                                                         dict()))
+                                                 sdn_ctrl_cfg=br_cfg.get("SDNController", {}))
                 ign_br_names[olid] = set()
                 ign_br_names[olid].add(self._overlays[olid].name)
                 name = self._create_guest_bridge(olid, br_cfg)
@@ -365,8 +361,8 @@ class BridgeController(ControllerModule):
         gbr = OvsBridge(name,
                         br_cfg["IP4"],
                         br_cfg["PrefixLen"],
-                        br_cfg.get("MTU", 1410),
-                        br_cfg.get("STP", True),
+                        br_cfg.get("MTU", 1410), self,
+                        br_cfg.get("STP", False),
                         sdn_ctrl_cfg=dict())
 
         self._guest[olid] = gbr

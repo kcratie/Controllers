@@ -40,7 +40,7 @@ class Topology(ControllerModule, CFX):
         nid = self._cm_config["NodeId"]
         for olid in self._cfx_handle.query_param("Overlays"):
             self._overlays[olid] = dict(NetBuilder=NetworkBuilder(self, olid, nid), KnownPeers=[],
-                                        NewPeerCount=0, Banlist=dict())
+                                        NewPeerCount=0, Banlist=dict(), OndPeers=[])
         try:
             # Subscribe for data request notifications from OverlayVisualizer
             self._cfx_handle.start_subscription("OverlayVisualizer",
@@ -113,11 +113,13 @@ class Topology(ControllerModule, CFX):
                     params = {"OverlayId": olid, "NodeId": self._cm_config["NodeId"],
                               "Peers": peer_list,
                               "EnforcedEdges": enf_lnks,
-                              "MaxSuccessors": self._cm_config["Overlays"][olid].get("MaxSuccessors", 1),
-                              "MaxLongDistEdges": self._cm_config["Overlays"][olid].get("MaxLongDistEdges", 2),
+                              "MaxSuccessors": self._cm_config["Overlays"][olid].get(
+                                  "MaxSuccessors", 1),
+                              "MaxLongDistEdges": self._cm_config["Overlays"][olid].get(
+                                  "MaxLongDistEdges", 2),
                               "ManualTopology": manual_topo}
                     gb = GraphBuilder(params)
-                    adjl = gb.build_adj_list(nb.get_adj_list())
+                    adjl = gb.build_adj_list(nb.get_adj_list(), self._overlays[olid]["OndPeers"])
                     nb.refresh(adjl)
                     self._overlays[olid]["NewPeerCount"] = 0
                 else:
@@ -187,6 +189,17 @@ class Topology(ControllerModule, CFX):
         cbt.set_response("Accept", True)
         self.complete_cbt(cbt)
 
+    def req_handler_req_ond_tunnel(self, cbt):
+        """ params[0] - overlay_id, [1] - peer_id, [2] - ADD/REMOVE op string """
+        olid = cbt.request.params[0]
+        peer = (cbt.request.params[1], cbt.request.params[2])
+        with self._lock:
+            if olid in self._overlays and peer[0] in self._overlays[olid]["KnownPeers"]:
+                self._overlays[olid]["OndPeers"].append(peer)
+            else:
+                self.register_cbt("Logger", "LOG_WARNING", "Invalid on demand tunnel request "
+                                  "parameter, OverlayId={0}, PeerId={1}".format(olid, peer[0]))
+
     def process_cbt(self, cbt):
         if cbt.op_type == "Request":
             if cbt.request.action == "SIG_PEER_PRESENCE_NOTIFY":
@@ -199,6 +212,8 @@ class Topology(ControllerModule, CFX):
                 self.req_handler_link_data_update(cbt)
             elif cbt.request.action == "TOP_INCOMING_TUNNEL_REQ":
                 self.request_handler_tunnel_req(cbt)
+            elif cbt.request.action == "TOP_REQUEST_OND_TUNNEL":
+                self.req_handler_req_ond_tunnel(cbt)
             else:
                 self.req_handler_default(cbt)
         elif cbt.op_type == "Response":
@@ -239,10 +254,11 @@ class Topology(ControllerModule, CFX):
                       "Peers": self._overlays[olid]["KnownPeers"],
                       "EnforcedEdges": enf_lnks,
                       "MaxSuccessors": self._cm_config["Overlays"][olid].get("MaxSuccessors", 1),
-                      "MaxLongDistEdges": self._cm_config["Overlays"][olid].get("MaxLongDistEdges", 2),
+                      "MaxLongDistEdges": self._cm_config["Overlays"][olid].get(
+                          "MaxLongDistEdges", 2),
                       "ManualTopology": manual_topo}
             gb = GraphBuilder(params)
-            adjl = gb.build_adj_list(nb.get_adj_list())
+            adjl = gb.build_adj_list(nb.get_adj_list(), self._overlays[olid]["OndPeers"])
             nb.refresh(adjl)
             self._overlays[olid]["NewPeerCount"] = 0
         else:

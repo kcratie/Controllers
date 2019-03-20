@@ -39,6 +39,7 @@ class ConnectionEdge():
         self.connected_time = None
         self.edge_state = "CEStateUnknown"
         self.edge_type = edge_type
+        self.edge_role = [edge_type]
         self.marked_for_delete = False
 
     def __key__(self):
@@ -136,6 +137,17 @@ class ConnEdgeAdjacenctList():
                %(self.overlay_id, self.node_id, self.conn_edges)
         return msg
 
+    def __contains__(self, peer_id):
+        if peer_id in self.conn_edges:
+            return True
+        return False
+
+    def __getitem__(self, peer_id):
+        return self.conn_edges[peer_id]
+
+    def __delitem__(self, peer_id):
+        return self.conn_edges.pop(peer_id, None)
+
     def add_connection_edge(self, ce):
         self.conn_edges[ce.peer_id] = ce
 
@@ -205,9 +217,6 @@ class NetworkGraph():
         if vertex not in self._graph:
             self._graph[vertex] = ConnEdgeAdjacenctList()
 
-    def add_edge(self, edge):
-        pass
-
     def _generate_edges(self):
         """
         Generating the edges of the graph "graph". Edges are represented as sets
@@ -228,73 +237,3 @@ class NetworkGraph():
         for edge in self._generate_edges():
             res += str(edge) + "\n"
         return res
-
-    # todo: fix methods below
-    def find_path(self, start_vertex, end_vertex, path=None):
-        """
-        Find a path from start_vertex to end_vertex in graph
-        """
-        if path is None:
-            path = []
-        graph = self._graph
-        path = path + [start_vertex]
-        if start_vertex == end_vertex:
-            return path
-        if start_vertex not in graph:
-            return None
-        for vertex in graph[start_vertex]:
-            if vertex not in path:
-                extended_path = self.find_path(vertex,
-                                               end_vertex,
-                                               path)
-                if extended_path:
-                    return extended_path
-        return None
-
-    def find_all_paths(self, start_vertex, end_vertex, path=None):
-        """ find all paths from start_vertex to
-            end_vertex in graph """
-        if not path:
-            path = []
-        graph = self._graph
-        path = path + [start_vertex]
-        if start_vertex == end_vertex:
-            return [path]
-        if start_vertex not in graph:
-            return []
-        paths = []
-        for vertex in graph[start_vertex]:
-            if vertex not in path:
-                extended_paths = self.find_all_paths(vertex,
-                                                     end_vertex,
-                                                     path)
-                for p in extended_paths:
-                    paths.append(p)
-        return paths
-
-    def vertex_degree(self, vertex):
-        """ The degree of a vertex is the number of edges connecting
-            it, i.e. the number of adjacent vertices. Loops are counted
-            double, i.e. every occurence of vertex in the list
-            of adjacent vertices. """
-        adj_vertices = self._graph[vertex]
-        degree = len(adj_vertices) + adj_vertices.count(vertex)
-        return degree
-
-    def delta(self):
-        """ the minimum degree of the graph """
-        minv = 100000000
-        for vertex in self._graph:
-            vertex_degree = self.vertex_degree(vertex)
-            if vertex_degree < minv:
-                minv = vertex_degree
-        return minv
-
-    def Delta(self):
-        """ the maximum degree of the graph """
-        maxv = 0
-        for vertex in self._graph:
-            vertex_degree = self.vertex_degree(vertex)
-            if vertex_degree > maxv:
-                maxv = vertex_degree
-        return maxv
