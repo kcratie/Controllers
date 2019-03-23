@@ -219,7 +219,7 @@ class LearningTable():
         self._dpid = None
         self._nid = None            # local node id
         self.mac_to_port = {}       # the last observed ingress for the src mac
-        self.leaf_ports = set()     # provided by net node
+        self._leaf_ports = set()     # provided by net node
         self.rnid_tbl = {}          # flows associated with a remote switch
         self.logger = ryu.logger
 
@@ -227,10 +227,12 @@ class LearningTable():
         return self.mac_to_port.__contains__(key_mac)
 
     def __repr__(self):
-        pass
+        state = "dpid={0}, nid={1}, mac_to_port={2}, leaf_ports={3}, rnid_tbl={4}"\
+                .format(self._dpid, self._nid, self.mac_to_port, self.leaf_ports, self.rnid_tbl)
+        return state
 
     def __str__(self):
-        return str("LearningTable<{}>".format(self.mac_to_port))
+        return str("LearningTable<{}>".format(self.__repr__()))
 
     def __getitem__(self, key_mac):
         val = self.mac_to_port.get(key_mac, (None, None))
@@ -268,8 +270,18 @@ class LearningTable():
     @property
     def local_leaf_macs(self):
         if not self._nid:
-            return []
+            return set()
         return self.rnid_tbl[self._nid]
+
+    @property
+    def leaf_ports(self):
+        return self._leaf_ports
+
+    @leaf_ports.setter
+    def leaf_ports(self, ports_set):
+        self._leaf_ports = ports_set
+        #for prt in self._leaf_ports:
+        #    self.rnid_tbl[self._nid].add(prt)
 
     def learn(self, src_mac, in_port, rnid=None):
         if in_port in self.leaf_ports:
@@ -331,6 +343,11 @@ class RingRoute(app_manager.RyuApp):
         actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER,
                                           ofproto.OFPCML_NO_BUFFER)]
         self.add_flow(datapath, match, actions)
+        # deliver bounded flood frames to controller
+        match = parser.OFPMatch(eth_type=FloodRouteBound.ETH_TYPE_BF)
+        self.add_flow(datapath, match, actions, priority=100)
+        # drop multicast frames
+        self.add_flow_drop_multicast(datapath, None)
         self.lt.dpid = datapath.id
 
     @set_ev_cls(event.EventSwitchEnter)
@@ -358,20 +375,25 @@ class RingRoute(app_manager.RyuApp):
         msg = ev.msg
         dp = msg.datapath
         ofp = dp.ofproto
+        port_no = msg.desc.port_no
+        node = self.nodes[dp.id]
 
         if msg.reason == ofp.OFPPR_ADD:
             self.logger.info("OFPPortStatus: port ADDED desc=%s", msg.desc)
             self.update_net_node(dp)
-            self.lt.leaf_ports = self.nodes[dp.id].leaf_ports()
-            self.lt.register_peer_switch(self.nodes[dp.id].peer_id(msg.desc.port_no))
+            #if port_no in node.link_ports():
+            #    self.add_flow_drop_multicast(dp, port_no)
+            self.lt.leaf_ports = node.leaf_ports()
+            self.lt.register_peer_switch(node.peer_id(port_no))
             self.do_bf_leaf_transfer(dp, msg.desc.port_no)
             #self.create_direct_path_flows(dp, msg.desc)
         elif msg.reason == ofp.OFPPR_DELETE:
             self.logger.info("OFPPortStatus: port DELETED desc=%s", msg.desc)
-            self.del_flow_egress(dp, msg.desc.port_no)
+            self.del_flow_egress(dp, port_no)
             self.net_node_del_port(dp, msg.desc)
-            self.lt.leaf_ports = self.nodes[dp.id].leaf_ports()
+            self.lt.leaf_ports = node.leaf_ports()
             self.lt.forget()
+            #self.del_flow_drop_multicast(dp, port_no)
         elif msg.reason == ofp.OFPPR_MODIFY:
             self.logger.debug("OFPPortStatus: port MODIFIED desc=%s", msg.desc)
 
@@ -445,14 +467,14 @@ class RingRoute(app_manager.RyuApp):
         self.logger.info('---------------- '
                          '-------- ----------------- '
                          '-------- -------- --------')
-        for stat in sorted([flow for flow in body if flow.priority == 1],
-                           key=lambda flow: (flow.match['in_port'],
-                                             flow.match['eth_dst'])):
-            self.logger.info('%016x %8x %17s %8x %8d %8d',
-                             ev.msg.datapath.id,
-                             stat.match['in_port'], stat.match['eth_dst'],
-                             stat.instructions[0].actions[0].port,
-                             stat.packet_count, stat.byte_count)
+        #for stat in sorted([flow for flow in body if flow.priority == 1],
+        #                   key=lambda flow: (flow.match['in_port'],
+        #                                     flow.match['eth_dst'])):
+        #    self.logger.info('%016x %8x %17s %8x %8d %8d',
+        #                     ev.msg.datapath.id,
+        #                     stat.match['in_port'], stat.match['eth_dst'],
+        #                     stat.instructions[0].actions[0].port,
+        #                     stat.packet_count, stat.byte_count)
 
     #@set_ev_cls(ofp_event.EventOFPPortStatsReply, MAIN_DISPATCHER)
     #def _port_stats_reply_handler(self, ev):
@@ -501,7 +523,9 @@ class RingRoute(app_manager.RyuApp):
         inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
         mod = parser.OFPFlowMod(datapath=datapath, priority=priority,
                                 match=match, instructions=inst)
-        datapath.send_msg(mod)
+        resp = datapath.send_msg(mod)
+        if not resp:
+            self.logger.info("Add flow failed match=%s, action=%s", match, actions)
 
     def del_flow_egress(self, datapath, port_no):
         self.logger.info("Deleting all flows on outgress %s", port_no)
@@ -526,6 +550,41 @@ class RingRoute(app_manager.RyuApp):
                                                  match=mt, command=cmd, instructions=inst)
         datapath.send_msg(mod)
 
+    def del_flow_drop_multicast(self, datapath, in_port, priority=1):
+        ofproto = datapath.ofproto
+        parser = datapath.ofproto_parser
+        cmd = ofproto.OFPFC_DELETE
+        match = parser.OFPMatch(in_port=in_port, eth_dst=("33:33:00:00:00:00","ff:ff:00:00:00:00"))
+        mod = parser.OFPFlowMod(datapath=datapath, cookie=0, cookie_mask=0,
+                                table_id=ofproto.OFPTT_ALL, flags=ofproto.OFPFF_SEND_FLOW_REM,
+                                match=match, command=cmd)
+        resp = datapath.send_msg(mod)
+        if not resp:
+            self.logger.info("Remove multicast flow on port=%s failed", in_port)
+
+        #match = parser.OFPMatch(in_port=in_port, eth_dst="ff:ff:ff:ff:ff:ff")
+        #mod = parser.OFPFlowMod(datapath=datapath, cookie=0, cookie_mask=0,
+        #                        table_id=ofproto.OFPTT_ALL, flags=ofproto.OFPFF_SEND_FLOW_REM,
+        #                        match=match, command=cmd)
+        #resp = datapath.send_msg(mod)
+        #if not resp:
+        #    self.logger.info("Remove broadcast flow on port=%s failed", in_port)
+
+    def add_flow_drop_multicast(self, datapath, in_port, priority=1):
+        ofproto = datapath.ofproto
+        parser = datapath.ofproto_parser
+
+        match = parser.OFPMatch(eth_dst=("33:33:00:00:00:00","ff:ff:00:00:00:00"))
+        # match = parser.OFPMatch(in_port=in_port, eth_dst=("33:33:00:00:00:00","ff:ff:00:00:00:00"))
+        inst = [parser.OFPInstructionActions(ofproto.OFPIT_CLEAR_ACTIONS, [])]
+
+        mod = parser.OFPFlowMod(datapath=datapath, priority=priority, match=match,
+                                command=ofproto.OFPFC_ADD, instructions=inst)
+        resp = datapath.send_msg(mod)
+        match = parser.OFPMatch(eth_dst=("01:00:5e:00:00:00","ff:ff:ff:ff:ff:00"))
+        mod = parser.OFPFlowMod(datapath=datapath, priority=priority, match=match,
+                                command=ofproto.OFPFC_ADD, instructions=inst)
+        resp = datapath.send_msg(mod)
     ###############################################################################################
 
     def update_net_node(self, datapath):
@@ -595,20 +654,23 @@ class RingRoute(app_manager.RyuApp):
 
     def do_bf_leaf_transfer(self, datapath, tunnel_port_no):
         node = self.nodes[datapath.id]
-        nid = node.node_id
-        bf_hdr = FloodRouteBound(nid, nid, 0)
         tun_item = node.links.get(tunnel_port_no)
         if not tun_item: return
         peer_id = tun_item[2]
         peer_mac = tun_item[1]
         src_mac = tun_item[0]
 
+        if not self.lt.local_leaf_macs: return
         payload = bytearray(6*len(self.lt.local_leaf_macs))
         offset = 0
         for leaf_mac in self.lt.local_leaf_macs:
             bmac = mac_lib.haddr_to_bin(leaf_mac)
             struct.pack_into("!6s", payload, offset, bmac)
             offset += 6
+
+        nid = node.node_id
+        bf_hdr = FloodRouteBound(nid, nid, 0, FloodRouteBound.FRB_LEAF_TX, offset//6)
+
         eth = ethernet.ethernet(dst=peer_mac,
                                 src=src_mac,
                                 ethertype=FloodRouteBound.ETH_TYPE_BF)
@@ -623,8 +685,8 @@ class RingRoute(app_manager.RyuApp):
         pkt_out = parser.OFPPacketOut(datapath=datapath, buffer_id=ofproto.OFP_NO_BUFFER,
                                       actions=acts, data=p.data, in_port=ofproto.OFPP_LOCAL)
         datapath.send_msg(pkt_out)
-        self.logger.info("Doing BF Leaf Tx packet %s %s %s %s", datapath.id, peer_id, peer_mac,
-                         tunnel_port_no)
+        self.logger.info("Doing BF Leaf Tx packet %s %s %s %s %s", datapath.id, peer_id, peer_mac,
+                         tunnel_port_no, payload)
 
     def handle_bounded_flood_msg(self, datapath, pkt, in_port, msg):
         eth = pkt.protocols[0]
@@ -638,11 +700,13 @@ class RingRoute(app_manager.RyuApp):
         self.lt[src] = (in_port, rcvd_frb.root_nid)
         self.logger.info("rcvd_frb=%s", rcvd_frb)
         if rcvd_frb.hop_count == 0:
-            self.update_leaf_macs_and_flows(datapath, rcvd_frb.root_nid, payload, in_port)
+            self.update_leaf_macs_and_flows(datapath, rcvd_frb.root_nid, payload,
+                                            rcvd_frb.pl_count, in_port)
         else:
             if rcvd_frb.hop_count > self.nodes[dpid].counters.get("MaxFloodingHopCount", 1):
                 self.nodes[dpid].counters["MaxFloodingHopCount"] = rcvd_frb.hop_count
             # deliver the broadcast frame to leaf devices
+            self.logger.info("delivering BF payload on leaf ports=%s", self.nodes[datapath.id].leaf_ports())
             for out_port in self.nodes[datapath.id].leaf_ports():
                 actions = [parser.OFPActionOutput(out_port)]
                 out = parser.OFPPacketOut(datapath=datapath, buffer_id=msg.buffer_id,
@@ -658,10 +722,11 @@ class RingRoute(app_manager.RyuApp):
             if out_bounds:
                 self.do_bounded_flood(datapath, in_port, out_bounds, src, payload)
 
-    def update_leaf_macs_and_flows(self, datapath, rnid, macs, ingress):
+    def update_leaf_macs_and_flows(self, datapath, rnid, macs, num_items, ingress):
         self.lt.rnid_tbl[rnid].clear()
         # hack until the trailing bytes are identified
-        for mactup in struct.iter_unpack("!6s", macs[:6]):
+        len = num_items*6
+        for mactup in struct.iter_unpack("!6s", macs[:len]):
             macstr = mac_lib.haddr_to_str(mactup[0])
             self.lt.rnid_tbl[rnid].add(macstr)
             self.logger.info("Added leaf mac %s to rnid %s", macstr, rnid)
@@ -687,9 +752,11 @@ class FloodRouteBound(packet_base.PacketBase):
     value to zero
     root_nid is the node id of the switch that initiated the bounded flood operation
     """
-    _PACK_STR = '!16s16sB'
+    _PACK_STR = '!16s16sBBB'
     _MIN_LEN = struct.calcsize(_PACK_STR)
     ETH_TYPE_BF = 0xc0c0
+    FRB_BRDCST = 0
+    FRB_LEAF_TX = 1
     #_TYPE = {
     #    "ascii": [
     #        "root_nid",
@@ -698,11 +765,16 @@ class FloodRouteBound(packet_base.PacketBase):
     #    ]
     #}
 
-    def __init__(self, root_nid, bound_nid, hop_count):
+    def __init__(self, root_nid, bound_nid, hop_count, frb_type=0, pl_count=0):
         super(FloodRouteBound, self).__init__()
         self.root_nid = root_nid
         self.bound_nid = bound_nid
         self.hop_count = hop_count
+        self.frb_type = frb_type
+        self.pl_count = pl_count
+        assert self.hop_count < (1<<16), "hop_count exceeds max val"
+        assert self.frb_type < (1<<16), "frb_type exceeds max val"
+        assert self.pl_count < (1<<16), "pl_count exceeds max val"
 
     def __repr__(self):
         return str("frb<root_nid={0}, bound_nid={1}, hop_count={2}>"
@@ -713,15 +785,22 @@ class FloodRouteBound(packet_base.PacketBase):
         rid = uuid.UUID(bytes=unpk_data[0])
         bid = uuid.UUID(bytes=unpk_data[1])
         hops = unpk_data[2]
+        ty = unpk_data[3]
+        cnt = unpk_data[4]
         #rid = uuid.UUID(bytes=buf[:16])
         #bid = uuid.UUID(bytes=buf[16:32])
         #hops = int.from_bytes(buf[32:33], byteorder=sys.byteorder)
-        return cls(rid.hex, bid.hex, hops), None, buf[cls._MIN_LEN:]
+        return cls(rid.hex, bid.hex, hops, ty, cnt), None, buf[cls._MIN_LEN:]
 
     def serialize(self, payload, prev):
         rid = uuid.UUID(hex=self.root_nid).bytes
         bid = uuid.UUID(hex=self.bound_nid).bytes
-        return struct.pack(FloodRouteBound._PACK_STR, rid, bid, self.hop_count)
+        if self.hop_count == 0:
+            self.frb_type = FloodRouteBound.FRB_LEAF_TX
+        if self.frb_type == FloodRouteBound.FRB_LEAF_TX:
+            self.pl_count = len(payload) // 6
+        return struct.pack(FloodRouteBound._PACK_STR, rid, bid, self.hop_count, self.frb_type,
+                           self.pl_count)
 
 ###################################################################################################
 ###################################################################################################
@@ -883,11 +962,11 @@ class TrafficAnalyzer():
     def analyze(self, flow_metrics, learning_table):
         tunnel_reqs = []
 
-        for stat in sorted([flow for flow in flow_metrics if flow.priority == 1],
-                           key=lambda flow: (flow.match['in_port'],
-                                             flow.match['eth_dst'])):
-            if stat.byte_count > (1<<20):
-                in_port = stat.match['in_port']
+        #for stat in sorted([flow for flow in flow_metrics if flow.priority == 1],
+        #                   key=lambda flow: (flow.match['in_port'],
+        #                                     flow.match['eth_dst'])):
+        #    if stat.byte_count > (1<<20):
+        #        in_port = stat.match['in_port']
                 #in_mac = learning_table[(self._dpid, in_port)]
                 ## Wrong! need root nid_, remote_peerid = self._mac_to_peer_id.get(in_mac, (None, None))
                 #if remote_peerid:
