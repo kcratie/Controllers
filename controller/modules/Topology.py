@@ -230,7 +230,7 @@ class Topology(ControllerModule, CFX):
                     parent_cbt.set_response(cbt_data, cbt_status)
                     self.complete_cbt(parent_cbt)
 
-    def _cleanup_blacklist(self):
+    def _cleanup_banlist(self):
         # Remove peers from the duration based banlist. Higher successive connection failures
         # results in potentially longer duration in the banlist.
         tmp = []
@@ -267,8 +267,9 @@ class Topology(ControllerModule, CFX):
     def manage_topology(self):
         # Periodically refresh the topology, making sure desired links exist and exipred ones are
         # removed.
-        self._cleanup_blacklist()
+        self._cleanup_banlist()
         for olid in self._overlays:
+            self.register_cbt("Logger", "LOG_INFO", "known_peers={}".format(self._overlays[olid]["KnownPeers"]))
             self._update_overlay(olid)
 
     def timer_method(self):

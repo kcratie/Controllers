@@ -58,13 +58,13 @@ class netNode():
         self.topo = ConnEdgeAdjacenctList()
         self._leaf_prts = None
         self.switch = None
-        self.links = dict() # maps port no to tuple (local_mac, peer_mac, peer_id)
-        self.ryu = ryu_app
-        self.logger = ryu_app.logger
-        self.update_node_id()
+        self.links = {} # maps port no to tuple (local_mac, peer_mac, peer_id)
         self.mac_local_to_peer = {}
         self.counters = {}
+        self.ryu = ryu_app
+        self.logger = ryu_app.logger
         self.traffic_analyzer = TrafficAnalyzer(self.mac_local_to_peer, datapath.id)
+        self.update_node_id()
 
     def __repr__(self):
         return ("node_id=%s, node_address=%s:%s, datapath_id=0x%016x, switch=%s, topo=%s" %
@@ -102,6 +102,8 @@ class netNode():
         return link_item[2]
 
     def update(self):
+        if not self.node_id:
+            self.update_node_id()
         self.logger.info("Updating node %s", self.node_id)
         self.update_switch()
         self.update_ipop_topology()
@@ -270,7 +272,7 @@ class LearningTable():
     @property
     def local_leaf_macs(self):
         if not self._nid:
-            return set()
+            return None
         return self.rnid_tbl[self._nid]
 
     @property
@@ -280,8 +282,6 @@ class LearningTable():
     @leaf_ports.setter
     def leaf_ports(self, ports_set):
         self._leaf_ports = ports_set
-        #for prt in self._leaf_ports:
-        #    self.rnid_tbl[self._nid].add(prt)
 
     def learn(self, src_mac, in_port, rnid=None):
         if in_port in self.leaf_ports:
@@ -389,7 +389,7 @@ class RingRoute(app_manager.RyuApp):
             #self.create_direct_path_flows(dp, msg.desc)
         elif msg.reason == ofp.OFPPR_DELETE:
             self.logger.info("OFPPortStatus: port DELETED desc=%s", msg.desc)
-            self.del_flow_egress(dp, port_no)
+            self.del_flows_port(dp, port_no)
             self.net_node_del_port(dp, msg.desc)
             self.lt.leaf_ports = node.leaf_ports()
             self.lt.forget()
@@ -527,7 +527,7 @@ class RingRoute(app_manager.RyuApp):
         if not resp:
             self.logger.info("Add flow failed match=%s, action=%s", match, actions)
 
-    def del_flow_egress(self, datapath, port_no):
+    def del_flows_port(self, datapath, port_no):
         self.logger.info("Deleting all flows on outgress %s", port_no)
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
@@ -536,7 +536,17 @@ class RingRoute(app_manager.RyuApp):
         mod = parser.OFPFlowMod(datapath=datapath, cookie=0, cookie_mask=0,
                                 table_id=ofproto.OFPTT_ALL, flags=ofproto.OFPFF_SEND_FLOW_REM,
                                 match=match, command=cmd, out_port=port_no)
-        datapath.send_msg(mod)
+        resp = datapath.send_msg(mod)
+        if not resp:
+            self.logger.info("Failed to delete flow on outgress %s", port_no)
+        match = parser.OFPMatch(in_port=port_no)
+        mod = parser.OFPFlowMod(datapath=datapath, table_id=ofproto.OFPTT_ALL, 
+                                flags=ofproto.OFPFF_SEND_FLOW_REM,
+                                match=match, command=cmd)
+        resp = datapath.send_msg(mod)
+        if not resp:
+            self.logger.info("Failed to delete flow on outgress %s", port_no)
+
 
     def update_flow_match_dstmac(self, datapath, dst_mac, new_egress):
         self.logger.info("Updating all flows matching dst mac %s", dst_mac)
@@ -603,20 +613,20 @@ class RingRoute(app_manager.RyuApp):
             node = netNode(datapath, self)
         node.delete_port(ofpport)
 
-    #def _is_brdcast_from_leaf(self, msg):
-    #    pkt = packet.Packet(msg.data)
-    #    eth = pkt.get_protocols(ethernet.ethernet)[0]
-    #    dst = eth.dst
-    #    in_port = msg.match['in_port']
-    #    dp = msg.datapath
+    def _is_brdcast_from_leaf(self, msg):
+        pkt = packet.Packet(msg.data)
+        eth = pkt.get_protocols(ethernet.ethernet)[0]
+        dst = eth.dst
+        in_port = msg.match['in_port']
+        dp = msg.datapath
 
-    #    node = self.nodes.get(dp.id, None)
-    #    if not node:
-    #        self.logger.info("refreshing net node %s", dp.id)
-    #        node = self.update_net_node(dp)
+        node = self.nodes.get(dp.id, None)
+        if not node:
+            self.logger.info("refreshing net node %s", dp.id)
+            node = self.update_net_node(dp)
 
-    #    lfs = node.leaf_ports()
-    #    return dst == "ff:ff:ff:ff:ff:ff" and in_port in lfs
+        lfs = node.leaf_ports()
+        return dst == "ff:ff:ff:ff:ff:ff" and in_port in lfs
 
     def do_bounded_flood(self, datapath, ingress, tx_bounds, src_mac, payload):
         """
@@ -695,10 +705,11 @@ class RingRoute(app_manager.RyuApp):
         dpid = datapath.id
         parser = datapath.ofproto_parser
         rcvd_frb = pkt.protocols[1]
+        self.logger.info("rcvd_frb=%s", rcvd_frb)
+        if len(pkt.protocols) < 2: return
         payload = pkt.protocols[2]
         #learn src mac and rnid
         self.lt[src] = (in_port, rcvd_frb.root_nid)
-        self.logger.info("rcvd_frb=%s", rcvd_frb)
         if rcvd_frb.hop_count == 0:
             self.update_leaf_macs_and_flows(datapath, rcvd_frb.root_nid, payload,
                                             rcvd_frb.pl_count, in_port)
