@@ -291,3 +291,57 @@ def runshell(cmd):
         err = "Subprocess: \"{0}\" failed, std err = {1}".format(str(cmd), str(p.stderr))
         raise RuntimeError(err)
     return p
+
+class RemoteAction():
+    def __init__(self, overlay_id, recipient_id, recipient_cm, action, params,
+                 parent_cbt=None, frm_cbt=None):
+        self.overlay_id = overlay_id
+        self.recipient_id = recipient_id
+        self.recipient_cm = recipient_cm
+        self.action = action
+        self.params = params
+        self._parent_cbt = parent_cbt
+        self.cbt = frm_cbt
+        self.initiator_id = None
+        self.initiator_cm = None
+        self.action_tag = None
+
+    def __iter__(self):
+        yield("OverlayId", self.overlay_id)
+        yield("RecipientId", self.recipient_id)
+        yield("RecipientCM", self.recipient_cm)
+        yield("Action", self.action)
+        yield("Params", self.params)
+        if self.initiator_id:
+            yield("InitiatorId", self.initiator_id)
+        if self.initiator_cm:
+            yield("InitiatorCM", self.initiator_cm)
+        if self.action_tag:
+            yield("ActionTag", self.action_tag)
+
+    def submit_remote_act(self, cm):
+        ra_desc = dict(self)
+        if self._parent_cbt is not None:
+            endp_cbt = cm.create_linked_cbt(self._parent_cbt)
+            endp_cbt.set_request(cm._module_name, "Signal", "SIG_REMOTE_ACTION", ra_desc)
+        else:
+            endp_cbt = cm.create_cbt(cm._module_name, "Signal", "SIG_REMOTE_ACTION", ra_desc)
+        cm.submit_cbt(endp_cbt)
+
+    @classmethod
+    def from_cbt(cls, cbt):
+        pms = cbt.request.params
+        rem_act = cls(pms["OverlayId"], pms["RecipientId"], pms["RecipientCM"],
+                      pms["Action"], pms["Params"], frm_cbt=cbt)
+        rem_act.initiator_cm = cbt.request.initiator
+        rem_act.action_tag = cbt.tag
+        return rem_act
+
+    def tx_remote_act(self, sig):
+        if self.overlay_id not in sig.overlays:
+            self.cbt.set_response("Overlay ID not found", False)
+            sig.complete_cbt(self.cbt)
+            return
+        self.initiator_id = sig.node_id
+        rem_act = dict(self)
+        sig.transmit_remote_act(rem_act, self.recipient_id, "invk")

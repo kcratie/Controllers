@@ -51,6 +51,10 @@ class ControllerModule():
     def terminate(self):
         pass
 
+    @property
+    def node_id(self):
+        return self._cm_config["NodeId"]
+
     def req_handler_default(self, cbt):
         log = "Unsupported CBT action {0}".format(cbt)
         self.register_cbt("Logger", "LOG_WARNING", log)

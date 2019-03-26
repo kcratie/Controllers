@@ -24,7 +24,8 @@ import time
 from controller.framework.CFx import CFX
 from controller.framework.ControllerModule import ControllerModule
 from controller.modules.NetworkBuilder import NetworkBuilder
-from  controller.modules.GraphBuilder import GraphBuilder
+from controller.modules.GraphBuilder import GraphBuilder
+from controller.framework.ipoplib import RemoteAction
 
 class Topology(ControllerModule, CFX):
     def __init__(self, cfx_handle, module_config, module_name):
@@ -264,6 +265,21 @@ class Topology(ControllerModule, CFX):
         else:
             self.register_cbt("Logger", "LOG_DEBUG", "Net builder busy, skipping...")
 
+    def _do_remote_action(self, overlay_id, recipient_id,
+                          action, params, parent_cbt=None):
+        remote_act = dict(OverlayId=overlay_id,
+                          RecipientId=recipient_id,
+                          RecipientCM="Topology",
+                          Action=action, Params=params)
+        if parent_cbt is not None:
+            endp_cbt = self.create_linked_cbt(parent_cbt)
+            endp_cbt.set_request(self._module_name, "Signal",
+                                 "SIG_REMOTE_ACTION", remote_act)
+        else:
+            endp_cbt = self.create_cbt(self._module_name, "Signal",
+                                       "SIG_REMOTE_ACTION", remote_act)
+        self.submit_cbt(endp_cbt)
+
     def manage_topology(self):
         # Periodically refresh the topology, making sure desired links exist and exipred ones are
         # removed.
@@ -293,3 +309,6 @@ class Topology(ControllerModule, CFX):
 
     def top_log(self, msg, level="LOG_DEBUG"):
         self.register_cbt("Logger", level, msg)
+
+    def top_negotiate_edge(self, peer_id):
+        ra = RemoteAction()

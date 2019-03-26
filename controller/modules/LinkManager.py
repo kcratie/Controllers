@@ -24,6 +24,7 @@ import threading
 import uuid
 import time
 from controller.framework.ControllerModule import ControllerModule
+from controller.framework.ipoplib import RemoteAction
 
 
 class LinkManager(ControllerModule):
@@ -354,20 +355,26 @@ class LinkManager(ControllerModule):
                 "MAC": tnl_dscr["MAC"],
                 "UID": self._cm_config["NodeId"]}}
         endp_param.update(params)
-        remote_act = dict(OverlayId=overlay_id,
-                          RecipientId=parent_cbt.request.params["PeerId"],
-                          RecipientCM="LinkManager",
-                          Action="LNK_REQ_LINK_ENDPT",
-                          Params=endp_param)
-        if parent_cbt is not None:
-            endp_cbt = self.create_linked_cbt(parent_cbt)
-            endp_cbt.set_request(self._module_name, "Signal",
-                                 "SIG_REMOTE_ACTION", remote_act)
-        else:
-            endp_cbt = self.create_cbt(self._module_name, "Signal",
-                                       "SIG_REMOTE_ACTION", remote_act)
-        # Send the message via SIG server to peer
-        self.submit_cbt(endp_cbt)
+
+        rem_act = RemoteAction(overlay_id, recipient_id=parent_cbt.request.params["PeerId"],
+                                  recipient_cm="LinkManager",
+                                  action="LNK_REQ_LINK_ENDPT",
+                                  params=endp_param, parent_cbt=parent_cbt)
+        rem_act.submit_remote_act(self)
+        #remote_act = dict(OverlayId=overlay_id,
+        #                  RecipientId=parent_cbt.request.params["PeerId"],
+        #                  RecipientCM="LinkManager",
+        #                  Action="LNK_REQ_LINK_ENDPT",
+        #                  Params=endp_param)
+        #if parent_cbt is not None:
+        #    endp_cbt = self.create_linked_cbt(parent_cbt)
+        #    endp_cbt.set_request(self._module_name, "Signal",
+        #                         "SIG_REMOTE_ACTION", remote_act)
+        #else:
+        #    endp_cbt = self.create_cbt(self._module_name, "Signal",
+        #                               "SIG_REMOTE_ACTION", remote_act)
+        ## Send the message via SIG server to peer
+        #self.submit_cbt(endp_cbt)
 
 
     def _rollback_link_creation_changes(self, tnlid):
