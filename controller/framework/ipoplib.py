@@ -294,7 +294,7 @@ def runshell(cmd):
 
 class RemoteAction():
     def __init__(self, overlay_id, recipient_id, recipient_cm, action, params,
-                 parent_cbt=None, frm_cbt=None):
+                 parent_cbt=None, frm_cbt=None, status=None, data=None):
         self.overlay_id = overlay_id
         self.recipient_id = recipient_id
         self.recipient_cm = recipient_cm
@@ -305,6 +305,8 @@ class RemoteAction():
         self.initiator_id = None
         self.initiator_cm = None
         self.action_tag = None
+        self.status = status
+        self.data = data
 
     def __iter__(self):
         yield("OverlayId", self.overlay_id)
@@ -318,6 +320,10 @@ class RemoteAction():
             yield("InitiatorCM", self.initiator_cm)
         if self.action_tag:
             yield("ActionTag", self.action_tag)
+        if self.status:
+            yield("Status", self.status)
+        if self.data:
+            yield("Data", self.data)
 
     def submit_remote_act(self, cm):
         ra_desc = dict(self)
@@ -330,11 +336,21 @@ class RemoteAction():
 
     @classmethod
     def from_cbt(cls, cbt):
-        pms = cbt.request.params
-        rem_act = cls(pms["OverlayId"], pms["RecipientId"], pms["RecipientCM"],
-                      pms["Action"], pms["Params"], frm_cbt=cbt)
-        rem_act.initiator_cm = cbt.request.initiator
-        rem_act.action_tag = cbt.tag
+        rem_act = None
+        if cbt.op_type == "Request":
+            reqp = cbt.request.params
+            rem_act = cls(reqp["OverlayId"], reqp["RecipientId"], reqp["RecipientCM"],
+                          reqp["Action"], reqp["Params"], frm_cbt=cbt)
+            rem_act.initiator_cm = cbt.request.initiator
+            rem_act.action_tag = cbt.tag
+        elif cbt.op_type == "Response":
+            resp_data = cbt.response.data
+            rem_act = cls(resp_data["OverlayId"], resp_data["RecipientId"], resp_data["RecipientCM"],
+                          resp_data["Action"], resp_data["Params"], frm_cbt=cbt,
+                          status=resp_data["Status"], data=resp_data["Data"])
+            rem_act.initiator_cm = resp_data["InitiatorCM"]
+            rem_act.initiator_id = resp_data["InitiatorId"]
+            rem_act.action_tag = cbt.tag
         return rem_act
 
     def tx_remote_act(self, sig):

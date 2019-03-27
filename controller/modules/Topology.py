@@ -24,6 +24,8 @@ import time
 from controller.framework.CFx import CFX
 from controller.framework.ControllerModule import ControllerModule
 from controller.modules.NetworkBuilder import NetworkBuilder
+from controller.modules.NetworkBuilder import EdgeRequest
+from controller.modules.NetworkBuilder import EdgeResponse
 from controller.modules.GraphBuilder import GraphBuilder
 from controller.framework.ipoplib import RemoteAction
 
@@ -201,6 +203,32 @@ class Topology(ControllerModule, CFX):
                 self.register_cbt("Logger", "LOG_WARNING", "Invalid on demand tunnel request "
                                   "parameter, OverlayId={0}, PeerId={1}".format(olid, peer[0]))
 
+    def req_handler_negotiate_edge(self, edge_cbt):
+        """ Role Node B, decide if the request for an incoming edge is accepted or rejected """
+        edge_req = EdgeRequest(**edge_cbt.request.params)
+        olid = edge_req.overlay_id
+        if olid not in self.config["Overlays"]:
+            self.register_cbt("Logger", "LOG_WARNING", "The requested overlay is not specified in "
+                              "local config, the edge request is discarded")
+            edge_cbt.set_response("Unknown overlay id specified in edge request", False)
+            self.complete_cbt(edge_cbt)
+            return
+        edge_resp = self._overlays[olid]["NetBuilder"].on_negotiate_edge_req(edge_req)
+        edge_cbt.set_response(edge_resp.data, edge_resp.is_accepted)
+        self.complete_cbt(edge_cbt)
+
+    def resp_handler_remote_action(self, cbt):
+        """ Role Node A, initiate edge creation on successful neogtiation """
+        rem_act = RemoteAction.from_cbt(cbt)
+        olid = rem_act.overlay_id
+        if rem_act.action == "TOP_NEGOTIATE_EDGE":
+            edge_resp = EdgeResponse(rem_act.status, rem_act.data)
+            self._overlays[olid]["NetBuilder"].on_negotiate_edge_resp(edge_resp)
+            self.free_cbt(cbt)
+        else:
+            self.register_cbt("Logger", "LOG_WARNING", "Unrecognized remote action {0}"
+                              .format(rem_act.action))
+
     def process_cbt(self, cbt):
         if cbt.op_type == "Request":
             if cbt.request.action == "SIG_PEER_PRESENCE_NOTIFY":
@@ -215,6 +243,8 @@ class Topology(ControllerModule, CFX):
                 self.request_handler_tunnel_req(cbt)
             elif cbt.request.action == "TOP_REQUEST_OND_TUNNEL":
                 self.req_handler_req_ond_tunnel(cbt)
+            elif cbt.request.action == "TOP_NEGOTIATE_EDGE":
+                self.req_handler_negotiate_edge(cbt)
             else:
                 self.req_handler_default(cbt)
         elif cbt.op_type == "Response":
@@ -222,6 +252,8 @@ class Topology(ControllerModule, CFX):
                 self.resp_handler_create_tnl(cbt)
             elif cbt.request.action == "LNK_REMOVE_TUNNEL":
                 self.resp_handler_remove_tnl(cbt)
+            elif cbt.request.action == "SIG_REMOTE_ACTION":
+                self.resp_handler_remote_action(cbt)
             else:
                 parent_cbt = cbt.parent
                 cbt_data = cbt.response.data
@@ -265,21 +297,6 @@ class Topology(ControllerModule, CFX):
         else:
             self.register_cbt("Logger", "LOG_DEBUG", "Net builder busy, skipping...")
 
-    def _do_remote_action(self, overlay_id, recipient_id,
-                          action, params, parent_cbt=None):
-        remote_act = dict(OverlayId=overlay_id,
-                          RecipientId=recipient_id,
-                          RecipientCM="Topology",
-                          Action=action, Params=params)
-        if parent_cbt is not None:
-            endp_cbt = self.create_linked_cbt(parent_cbt)
-            endp_cbt.set_request(self._module_name, "Signal",
-                                 "SIG_REMOTE_ACTION", remote_act)
-        else:
-            endp_cbt = self.create_cbt(self._module_name, "Signal",
-                                       "SIG_REMOTE_ACTION", remote_act)
-        self.submit_cbt(endp_cbt)
-
     def manage_topology(self):
         # Periodically refresh the topology, making sure desired links exist and exipred ones are
         # removed.
@@ -310,5 +327,12 @@ class Topology(ControllerModule, CFX):
     def top_log(self, msg, level="LOG_DEBUG"):
         self.register_cbt("Logger", level, msg)
 
-    def top_negotiate_edge(self, peer_id):
-        ra = RemoteAction()
+    def top_send_negotiate_edge_req(self, edge_req):
+        """Role Node A, Send a request to create an edge to the peer """
+        # overlay_id, peer_id, edge_type
+        #edge_params = {"OverlayId": overlay_id, "EdgeType": edge_type, "UID": self.node_id}
+        edge_params = edge_req._asdict()
+        rem_act = RemoteAction(edge_req.overlay_id, recipient_id=edge_req.recipient_id,
+                               recipient_cm="Topology", action="TOP_NEGOTIATE_EDGE",
+                               params=edge_params)
+        rem_act.submit_remote_act(self)

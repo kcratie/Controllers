@@ -26,7 +26,6 @@ import time
 from controller.framework.ControllerModule import ControllerModule
 from controller.framework.ipoplib import RemoteAction
 
-
 class LinkManager(ControllerModule):
 
     def __init__(self, cfx_handle, module_config, module_name):
@@ -357,9 +356,9 @@ class LinkManager(ControllerModule):
         endp_param.update(params)
 
         rem_act = RemoteAction(overlay_id, recipient_id=parent_cbt.request.params["PeerId"],
-                                  recipient_cm="LinkManager",
-                                  action="LNK_REQ_LINK_ENDPT",
-                                  params=endp_param, parent_cbt=parent_cbt)
+                               recipient_cm="LinkManager",
+                               action="LNK_REQ_LINK_ENDPT",
+                               params=endp_param, parent_cbt=parent_cbt)
         rem_act.submit_remote_act(self)
         #remote_act = dict(OverlayId=overlay_id,
         #                  RecipientId=parent_cbt.request.params["PeerId"],
@@ -465,10 +464,10 @@ class LinkManager(ControllerModule):
         # index for quick peer->link lookup
         self._peers[overlay_id][peerid] = tnlid
         self._tunnels[tnlid] = dict(OverlayId=overlay_id,
-                                     PeerId=peerid,
-                                     TunnelState="TNL_CREATING",
-                                     Descriptor=dict(),
-                                     CreationStartTime=time.time())
+                                    PeerId=peerid,
+                                    TunnelState="TNL_CREATING",
+                                    Descriptor=dict(),
+                                    CreationStartTime=time.time())
         self._assign_link_to_tunnel(tnlid, lnkid, 0xA1)
 
         self.register_cbt("Logger", "LOG_DEBUG", "Create Link:{} Phase 1/5 Node A - Peer: {}"
@@ -509,13 +508,13 @@ class LinkManager(ControllerModule):
         self.free_cbt(cbt)
 
     def is_incomplete_link(self, tnlid):
-        is_incomplete = (self._tunnels.get(tnlid, False) and 
+        is_incomplete = (self._tunnels.get(tnlid, False) and
                          self._tunnels[tnlid].get("Link", False) and
                          self._tunnels[tnlid]["Link"]["CreationState"] < 0xC0)
         return is_incomplete
 
     def is_complete_link(self, tnlid):
-        is_complete = (self._tunnels.get(tnlid, False) and 
+        is_complete = (self._tunnels.get(tnlid, False) and
                          self._tunnels[tnlid].get("Link", False) and
                          self._tunnels[tnlid]["Link"]["CreationState"] == 0xC0)
         return is_complete

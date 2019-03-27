@@ -125,9 +125,11 @@ class ConnEdgeAdjacenctList():
         self.conn_edges = {}
         self.max_successors = 1
         self.max_ldl = 4
+        self.max_ondemand = 5
         if cfg:
             self.max_successors = int(cfg["MaxSuccessors"])
             self.max_ldl = int(cfg["MaxLongDistEdges"])
+            self.max_ondemand = int(cfg["MaxLongDistEdges"])
 
     def __len__(self):
         return len(self.conn_edges)
@@ -147,6 +149,10 @@ class ConnEdgeAdjacenctList():
 
     def __delitem__(self, peer_id):
         return self.conn_edges.pop(peer_id, None)
+
+    @property
+    def threshold(self):
+        return 2 * (self.max_ldl + self.max_successors + self.max_ondemand)
 
     def add_connection_edge(self, ce):
         self.conn_edges[ce.peer_id] = ce

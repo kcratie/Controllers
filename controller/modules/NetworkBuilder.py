@@ -20,9 +20,13 @@
 # THE SOFTWARE.
 import threading
 from copy import deepcopy
+from collections import namedtuple
 from controller.modules.NetworkGraph import ConnectionEdge
 from controller.modules.NetworkGraph import ConnEdgeAdjacenctList
 
+EdgeRequest = namedtuple("EdgeRequest",
+                         ["overlay_id", "edge_type", "initiator_id", "recipient_id"])
+EdgeResponse = namedtuple("EdgeResponse", ["is_accepted", "data"])
 class NetworkBuilder():
     """description of class"""
     def __init__(self, top_man, overlay_id, node_id):
@@ -151,6 +155,8 @@ class NetworkBuilder():
                     self._pending_adj_list.conn_edges[peer_id]
                 if self._current_adj_list.conn_edges[peer_id].edge_state == "CEStateUnknown":
                     self._refresh_in_progress += 1
+                    self._negotiate_new_edge(self._pending_adj_list.conn_edges[peer_id].edge_type,
+                                             peer_id)
                     self._top.top_add_edge(overlay_id, peer_id)
             else:
                 # Existing edges in both Active and Pending are updated in place. Only the marked
@@ -174,3 +180,33 @@ class NetworkBuilder():
         self._create_new_edges()
         self._pending_adj_list = None
         self._remove_edges()
+
+    def _negotiate_new_edge(self, edge_type, peer_id):
+        olid = self._current_adj_list.overlay_id
+        nid = self._current_adj_list.node_id
+        er = EdgeRequest(overlay_id=olid, edge_type=edge_type,
+                         recipient_id=peer_id, initiator_id=nid)
+        self._top.top_send_negotiate_edge_req(er)
+
+    def on_negotiate_edge_req(self, edge_req):
+        peer_id = edge_req.initiator_id
+        if peer_id in self._current_adj_list:
+            edge_resp = EdgeResponse(is_accepted=False,
+                                   data="An edge already exists, link id={0}"
+                                   .format(self._current_adj_list[peer_id].link_id))
+
+        if len(self._current_adj_list) >= (2*self._current_adj_list.threshold):
+            edge_resp = EdgeResponse(is_accepted=False, data="Too many existing edges")
+
+        if (len(self._current_adj_list) < (2*self._current_adj_list.threshold) and
+                edge_req.edge_type == "CETypeSuccessor"):
+            edge_resp = EdgeResponse(is_accepted=True, data="Successor edge permitted")
+
+        if len(self._current_adj_list) < self._current_adj_list.threshold:
+            edge_resp = EdgeResponse(is_accepted=True, data="Any edge permitted")
+
+        self._top.top_log("Rcvd EdgeRequest={0}".format(edge_req))
+        return edge_resp
+
+    def on_negotiate_edge_resp(self, edge_resp):
+        self._top.top_log("Negotiated EdgeResponse={0}".format(edge_resp))
