@@ -322,7 +322,7 @@ class Signal(ControllerModule):
         """ Convert the received remote action into a CBT and invoke it locally """
         # if the intended recipient is offline the XMPP server broadcasts the msg to all
         # matching ejabber ids. Verify recipient using Node ID and discard if mismatch
-        if rem_act["RecipientId"] != self._cm_config["NodeId"]:
+        if rem_act["RecipientId"] != self.node_id:
             self.sig_log("A mis-delivered remote action was discarded: {0}"
                          .format(rem_act), "LOG_WARNING")
             return
@@ -337,7 +337,7 @@ class Signal(ControllerModule):
         """ Convert the received remote action into a CBT and complete it locally """
         # if the intended recipient is offline the XMPP server broadcasts the msg to all
         # matching ejabber ids. Verify recipient using Node ID and discard if mismatch
-        if rem_act["InitiatorId"] != self._cm_config["NodeId"]:
+        if rem_act["InitiatorId"] != self.node_id:
             self.sig_log("A mis-delivered remote action was discarded: {0}"
                          .format(rem_act), "LOG_WARNING")
             return
@@ -370,7 +370,7 @@ class Signal(ControllerModule):
         #    cbt.set_response("Overlay ID not found", False)
         #    self.complete_cbt(cbt)
         #    return
-        #rem_act["InitiatorId"] = self._cm_config["NodeId"]
+        #rem_act["InitiatorId"] = self.node_id
         #rem_act["InitiatorCM"] = cbt.request.initiator
         #rem_act["ActionTag"] = cbt.tag
         #self.transmit_remote_act(rem_act, peer_id, "invk")
@@ -431,7 +431,7 @@ class Signal(ControllerModule):
         with self._lock:
             for overlay_id in self._circles:
                 self._circles[overlay_id]["Transport"].send_presence(pstatus="ident#" +
-                                                                     self._cm_config["NodeId"])
+                                                                     self.node_id)
                 if self._timer_loop_cnt % 10 == 0:
                     self._circles[overlay_id]["JidCache"].scavenge()
                     self.scavenge_jid_resolution_queue(self._circles[overlay_id]

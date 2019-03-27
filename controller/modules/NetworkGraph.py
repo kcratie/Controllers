@@ -24,6 +24,7 @@ try:
 except ImportError:
     import json
 import struct
+import uuid
 
 class ConnectionEdge():
     """ A discriptor of the edge/link between two peers."""
@@ -34,7 +35,7 @@ class ConnectionEdge():
 
     def __init__(self, peer_id=None, edge_type="CETypeUnknown"):
         self.peer_id = peer_id
-        self.link_id = None
+        self._edge_id = uuid.uuid4()
         self.created_time = time.time()
         self.connected_time = None
         self.edge_state = "CEStateUnknown"
@@ -67,32 +68,36 @@ class ConnectionEdge():
         return hash(self.__key__())
 
     def __repr__(self):
-        msg = ("ConnectionEdge<peer_id = %s, link_id = %s, created_time = %s, connected_time = %s,"
+        msg = ("ConnectionEdge<peer_id = %s, edge_id = %s, created_time = %s, connected_time = %s,"
                " state = %s, edge_type = %s, marked_for_delete = %s>" %
-               (self.peer_id, self.link_id, str(self.created_time), str(self.connected_time),
+               (self.peer_id, self.edge_id, str(self.created_time), str(self.connected_time),
                 self.edge_state, self.edge_type, self.marked_for_delete))
-        #msg = ("ConnectionEdge<peer_id = %s, link_id = %s, state = %s, edge_type = %s>" %
-        #       (self.peer_id, self.link_id, self.edge_state, self.edge_type))
+        #msg = ("ConnectionEdge<peer_id = %s, edge_id = %s, state = %s, edge_type = %s>" %
+        #       (self.peer_id, self.edge_id, self.edge_state, self.edge_type))
         return msg
 
     def __iter__(self):
         yield("peer_id", self.peer_id)
-        yield("link_id", self.link_id)
+        yield("edge_id", self.edge_id)
         yield("created_time", self.created_time)
         yield("connected_time", self.connected_time)
         yield("edge_state", self.edge_state)
         yield("edge_type", self.edge_type)
         yield("marked_for_delete", self.marked_for_delete)
 
+    @property
+    def edge_id(self):
+        return self._edge_id.hex
+
     def serialize(self):
-        return struct.pack(ConnectionEdge._PACK_STR, self.peer_id, self.link_id, self.created_time,
+        return struct.pack(ConnectionEdge._PACK_STR, self.peer_id, self.edge_id, self.created_time,
                            self.connected_time, self.edge_state, self.edge_type,
                            self.marked_for_delete)
 
     @classmethod
     def from_bytes(cls, data):
         ce = cls()
-        (ce.peer_id, ce.link_id, ce.created_time, ce.connected_time, ce.edge_state,
+        (ce.peer_id, ce.edge_id, ce.created_time, ce.connected_time, ce.edge_state,
          ce.edge_type, ce.marked_for_delete) = struct.unpack_from(cls._PACK_STR, data)
         return ce
 
@@ -100,7 +105,7 @@ class ConnectionEdge():
         return json.dumps(dict(self))
 
     #def to_json(self):
-    #    return json.dumps(dict(peer_id=self.peer_id, link_id=self.link_id,
+    #    return json.dumps(dict(peer_id=self.peer_id, edge_id=self.edge_id,
     #                           created_time=self.created_time, connected_time=self.connected_time,
     #                           state=self.edge_state, edge_type=self.edge_type,
     #                           marked_for_delete=self.marked_for_delete))
@@ -109,7 +114,7 @@ class ConnectionEdge():
         ce = cls()
         jce = json.loads(json_str)
         ce.peer_id = jce["peer_id"]
-        ce.link_id = jce["link_id"]
+        ce.edge_id = jce["edge_id"]
         ce.created_time = jce["created_time"]
         ce.connected_time = jce["connected_time"]
         ce.edge_state = jce["edge_state"]
@@ -148,7 +153,7 @@ class ConnEdgeAdjacenctList():
         return self.conn_edges[peer_id]
 
     def __delitem__(self, peer_id):
-        return self.conn_edges.pop(peer_id, None)
+        del self.conn_edges[peer_id]
 
     @property
     def threshold(self):

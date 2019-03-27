@@ -26,6 +26,7 @@ from controller.framework.ControllerModule import ControllerModule
 from controller.modules.NetworkBuilder import NetworkBuilder
 from controller.modules.NetworkBuilder import EdgeRequest
 from controller.modules.NetworkBuilder import EdgeResponse
+from controller.modules.NetworkBuilder import EdgeNegotiate
 from controller.modules.GraphBuilder import GraphBuilder
 from controller.framework.ipoplib import RemoteAction
 
@@ -40,7 +41,7 @@ class Topology(ControllerModule, CFX):
         self._topo_changed_publisher = self._cfx_handle.publish_subscription("TOP_TOPOLOGY_CHANGE")
         self._cfx_handle.start_subscription("Signal", "SIG_PEER_PRESENCE_NOTIFY")
         self._cfx_handle.start_subscription("LinkManager", "LNK_TUNNEL_EVENTS")
-        nid = self._cm_config["NodeId"]
+        nid = self.node_id
         for olid in self._cfx_handle.query_param("Overlays"):
             self._overlays[olid] = dict(NetBuilder=NetworkBuilder(self, olid, nid), KnownPeers=[],
                                         NewPeerCount=0, Banlist=dict(), OndPeers=[])
@@ -113,7 +114,7 @@ class Topology(ControllerModule, CFX):
                     peer_list = [item for item in self._overlays[olid]["KnownPeers"] \
                         if item not in self._overlays[olid]["Banlist"]]
                     manual_topo = self._cm_config["Overlays"][olid].get("ManualTopology", False)
-                    params = {"OverlayId": olid, "NodeId": self._cm_config["NodeId"],
+                    params = {"OverlayId": olid, "NodeId": self.node_id,
                               "Peers": peer_list,
                               "EnforcedEdges": enf_lnks,
                               "MaxSuccessors": self._cm_config["Overlays"][olid].get(
@@ -221,9 +222,17 @@ class Topology(ControllerModule, CFX):
         """ Role Node A, initiate edge creation on successful neogtiation """
         rem_act = RemoteAction.from_cbt(cbt)
         olid = rem_act.overlay_id
+        if olid not in self.config["Overlays"]:
+            self.register_cbt("Logger", "LOG_WARNING", "The specified overlay is not in the"
+                              "local config, the rem act response is discarded")
+            self.free_cbt(cbt)
+            return
         if rem_act.action == "TOP_NEGOTIATE_EDGE":
-            edge_resp = EdgeResponse(rem_act.status, rem_act.data)
-            self._overlays[olid]["NetBuilder"].on_negotiate_edge_resp(edge_resp)
+            edge_nego = rem_act.params
+            edge_nego["is_accepted"] = rem_act.status
+            edge_nego["data"] = rem_act.data
+            edge_nego = EdgeNegotiate(**edge_nego)
+            self._overlays[olid]["NetBuilder"].on_negotiate_edge_resp(edge_nego)
             self.free_cbt(cbt)
         else:
             self.register_cbt("Logger", "LOG_WARNING", "Unrecognized remote action {0}"
@@ -283,7 +292,7 @@ class Topology(ControllerModule, CFX):
             self.register_cbt("Logger", "LOG_DEBUG", "Refreshing topology...")
             enf_lnks = self._cm_config["Overlays"][olid].get("EnforcedLinks", {})
             manual_topo = self._cm_config["Overlays"][olid].get("ManualTopology", False)
-            params = {"OverlayId": olid, "NodeId": self._cm_config["NodeId"],
+            params = {"OverlayId": olid, "NodeId": self.node_id,
                       "Peers": self._overlays[olid]["KnownPeers"],
                       "EnforcedEdges": enf_lnks,
                       "MaxSuccessors": self._cm_config["Overlays"][olid].get("MaxSuccessors", 1),
@@ -309,18 +318,24 @@ class Topology(ControllerModule, CFX):
         with self._lock:
             self.manage_topology()
 
-    def top_add_edge(self, overlay_id, peer_id):
+    def top_authorize_edge(self, overlay_id, peer_id, edge_id):
+        self.register_cbt("Logger", "LOG_INFO", "Authorizing peer edge {0}:{1}->{2}"
+                          .format(overlay_id, self.node_id[:7], peer_id[:7]))
+        params = {"OverlayId": overlay_id, "PeerId": peer_id, "TunnelId": edge_id}
+        self.register_cbt("LinkManager", "LNK_AUTH_TUNNEL", params)
+
+    def top_add_edge(self, overlay_id, peer_id, edge_id):
         """
-        Start the connection process to a peer if a direct edge is desirable
+        Instruct LinkManager to commence building a tunnel to the specified peer
         """
         self.register_cbt("Logger", "LOG_INFO", "Creating peer edge {0}:{1}->{2}"
-                          .format(overlay_id, self._cm_config["NodeId"][:7], peer_id[:7]))
-        params = {"OverlayId": overlay_id, "PeerId": peer_id}
+                          .format(overlay_id, self.node_id[:7], peer_id[:7]))
+        params = {"OverlayId": overlay_id, "PeerId": peer_id, "TunnelId": edge_id}
         self.register_cbt("LinkManager", "LNK_CREATE_TUNNEL", params)
 
     def top_remove_edge(self, overlay_id, peer_id):
         self.register_cbt("Logger", "LOG_INFO", "Removing peer edge {0}:{1}->{2}"
-                          .format(overlay_id, self._cm_config["NodeId"][:7], peer_id[:7]))
+                          .format(overlay_id, self.node_id[:7], peer_id[:7]))
         params = {"OverlayId": overlay_id, "PeerId": peer_id}
         self.register_cbt("LinkManager", "LNK_REMOVE_TUNNEL", params)
 
@@ -336,3 +351,4 @@ class Topology(ControllerModule, CFX):
                                recipient_cm="Topology", action="TOP_NEGOTIATE_EDGE",
                                params=edge_params)
         rem_act.submit_remote_act(self)
+

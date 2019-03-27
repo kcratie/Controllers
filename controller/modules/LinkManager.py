@@ -26,6 +26,28 @@ import time
 from controller.framework.ControllerModule import ControllerModule
 from controller.framework.ipoplib import RemoteAction
 
+class Link():
+    def __init__(self, lnkid, state):
+        self._lnkid = lnkid
+        self._creation_state = state
+        self._stats = {}
+        self._status_retry = 0
+
+class Tunnel():
+    def __init__(self, tnlid):
+        self._tnlid = tnlid
+        self._tap_name = None
+        self._overlay_id = None
+        self._tunnel_state = None
+        self._mac = None
+        self._fpr = None
+        self._links = {}
+        self._peer_id = None
+        self._peer_mac = None
+        self._tunnel_state = ""
+        self._creation_start_time = time.time()
+
+
 class LinkManager(ControllerModule):
 
     def __init__(self, cfx_handle, module_config, module_name):
@@ -272,7 +294,7 @@ class LinkManager(ControllerModule):
                 parent_cbt.set_response("Tunnel removed", True)
                 self.complete_cbt(parent_cbt)
         self.register_cbt("Logger", "LOG_INFO", "Tunnel {0} removed: {1}:{2}<->{3}"
-                          .format(tnlid[:7], olid[:7], self._cm_config["NodeId"][:7], peer_id[:7]))
+                          .format(tnlid[:7], olid[:7], self.node_id[:7], peer_id[:7]))
         #self.register_cbt("Logger", "LOG_DEBUG", "State:\n" + str(self))
 
     def resp_handler_remove_link(self, rmv_tnl_cbt):
@@ -294,7 +316,7 @@ class LinkManager(ControllerModule):
             parent_cbt.set_response("Link removed", True)
             self.complete_cbt(parent_cbt)
         self.register_cbt("Logger", "LOG_INFO", "Link {0} from Tunnel {1} removed: {2}:{3}<->{4}"
-                          .format(lnkid[:7], tnlid[:7], olid[:7], self._cm_config["NodeId"][:7],
+                          .format(lnkid[:7], tnlid[:7], olid[:7], self.node_id[:7],
                                   peer_id[:7]))
 
     def req_handler_query_tunnels_info(self, cbt):
@@ -320,7 +342,7 @@ class LinkManager(ControllerModule):
             tap_name = self._cm_config["Overlays"][overlay_id]["TapName"]
         create_tnl_params = {
             "OverlayId": overlay_id,
-            "NodeId": self._cm_config["NodeId"],
+            "NodeId": self.node_id,
             "TunnelId": tnlid,
             "LinkId": lnkid,
             "StunServers": self._cm_config["Stun"],
@@ -352,7 +374,7 @@ class LinkManager(ControllerModule):
             "NodeData": {
                 "FPR": tnl_dscr["FPR"],
                 "MAC": tnl_dscr["MAC"],
-                "UID": self._cm_config["NodeId"]}}
+                "UID": self.node_id}}
         endp_param.update(params)
 
         rem_act = RemoteAction(overlay_id, recipient_id=parent_cbt.request.params["PeerId"],
@@ -394,6 +416,8 @@ class LinkManager(ControllerModule):
                               "PeerId:{2}, LinkId:{0}, CreateState:{1}"
                               .format(tnlid[:7], format(creation_state, "02X"), peer_id[:7]))
 
+    def req_handler_auth_tunnel(self, cbt):
+        self.register_cbt("Logger", "LOG_DEBUG", "tunnelauth")
     def req_handler_create_tunnel(self, cbt):
         """
         Handle the request for capability LNK_CREATE_TUNNEL.
@@ -438,7 +462,7 @@ class LinkManager(ControllerModule):
                     "NodeData": {
                         "FPR": tnl_dscr["FPR"],
                         "MAC": tnl_dscr["MAC"],
-                        "UID": self._cm_config["NodeId"]
+                        "UID": self.node_id
                     }
                 }
                 remote_act = dict(OverlayId=overlay_id,
@@ -547,7 +571,7 @@ class LinkManager(ControllerModule):
                               .format(overlay_id[:7], peer_id[:7], lnkid[:7]))
             return
         if self.is_incomplete_link(tnlid):
-            if peer_id < self._cm_config["NodeId"]:
+            if peer_id < self.node_id:
                 # send tci remove link
                 self.register_cbt("Logger", "LOG_WARNING", "Req endpt collision from {0}, rmving local tunnel {1}".format(peer_id, tnlid))
 
@@ -601,7 +625,7 @@ class LinkManager(ControllerModule):
             "OverlayId": overlay_id,
             # overlay params
             "TunnelId": tnlid,
-            "NodeId": self._cm_config["NodeId"],
+            "NodeId": self.node_id,
             "StunServers": self._cm_config["Stun"],
             "Type": ol_type,
             "TapName": tap_name,
@@ -652,7 +676,7 @@ class LinkManager(ControllerModule):
         node_data = {
             "MAC": resp_data["MAC"],
             "FPR": resp_data["FPR"],
-            "UID": self._cm_config["NodeId"],
+            "UID": self.node_id,
             "CAS": resp_data["CAS"]
         }
         data = {
@@ -683,7 +707,7 @@ class LinkManager(ControllerModule):
         node_data = {
             "MAC": resp_data["MAC"],
             "FPR": resp_data["FPR"],
-            "UID": self._cm_config["NodeId"],
+            "UID": self.node_id,
             "CAS": resp_data["CAS"]
         }
         data = {
@@ -696,7 +720,7 @@ class LinkManager(ControllerModule):
         self.free_cbt(cbt)
         self.complete_cbt(parent_cbt)
         self.register_cbt("Logger", "LOG_INFO", "Tunnel {0} Link {1} accepted: {2}:{3}<-{4}"
-                          .format(tnlid[:7], lnkid[:7], olid[:7], self._cm_config["NodeId"][:7],
+                          .format(tnlid[:7], lnkid[:7], olid[:7], self.node_id[:7],
                                   peer_id[:7]))
 
     def _create_link_endpoint(self, rem_act, parent_cbt):
@@ -746,7 +770,7 @@ class LinkManager(ControllerModule):
             "TunnelId": tnlid,
             "LinkId": lnkid,
             "NodeData": {
-                "UID": self._cm_config["NodeId"], "MAC": cbt.response.data["MAC"],
+                "UID": self.node_id, "MAC": cbt.response.data["MAC"],
                 "CAS": local_cas, "FPR": cbt.response.data["FPR"]}}
         remote_act = dict(OverlayId=olid, RecipientId=peerid, RecipientCM="LinkManager",
                           Action="LNK_ADD_PEER_CAS", Params=params)
@@ -830,7 +854,7 @@ class LinkManager(ControllerModule):
         parent_cbt.set_response(data={"LinkId": lnkid}, status=True)
         self.complete_cbt(parent_cbt)
         self.register_cbt("Logger", "LOG_INFO", "Tunnel {0} created: {1}:{2}->{3}"
-                          .format(lnkid[:7], olid[:7], self._cm_config["NodeId"][:7], peer_id[:7]))
+                          .format(lnkid[:7], olid[:7], self.node_id[:7], peer_id[:7]))
 
     def resp_handler_remote_action(self, cbt):
         parent_cbt = cbt.parent
@@ -920,6 +944,9 @@ class LinkManager(ControllerModule):
 
                 elif cbt.request.action == "LNK_ADD_IGN_INF":
                     self.req_handler_add_ign_inf(cbt)
+
+                elif cbt.request.action == "LNK_AUTH_TUNNEL":
+                    self.req_handler_auth_tunnel(cbt)
                 else:
                     self.req_handler_default(cbt)
             elif cbt.op_type == "Response":
@@ -981,13 +1008,13 @@ class LinkManager(ControllerModule):
         pass
 
     def req_handler_query_viz_data(self, cbt):
-        node_id = str(self._cm_config["NodeId"])
+        nid = self.node_id
         tnls = dict()
         for tnlid in self._tunnels:
             if self._tunnels[tnlid]["Link"] is None:
                 continue
             tnl_data = {
-                "NodeId": node_id,
+                "NodeId": nid,
                 "PeerId": self._tunnels[tnlid]["PeerId"],
                 "TunnelState": self._tunnels[tnlid]["TunnelState"]
                 }
@@ -1004,9 +1031,9 @@ class LinkManager(ControllerModule):
 
             if overlay_id not in tnls:
                 tnls[overlay_id] = dict()
-            if node_id not in tnls[overlay_id]:
-                tnls[overlay_id][node_id] = dict()
-            tnls[overlay_id][node_id][tnlid] = tnl_data
+            if nid not in tnls[overlay_id]:
+                tnls[overlay_id][nid] = dict()
+            tnls[overlay_id][nid][tnlid] = tnl_data
 
         cbt.set_response({"LinkManager": tnls}, bool(tnls))
         self.complete_cbt(cbt)

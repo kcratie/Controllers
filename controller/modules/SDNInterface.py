@@ -153,7 +153,7 @@ class SDNInterface(ControllerModule):
         self.register_cbt("Logger", level, msg)
 
     def sdn_get_node_id(self):
-        return self._cm_config["NodeId"]
+        return self.node_id
 
     def sdn_get_node_topo(self):
         tries = 0

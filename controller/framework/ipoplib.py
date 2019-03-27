@@ -345,9 +345,8 @@ class RemoteAction():
             rem_act.action_tag = cbt.tag
         elif cbt.op_type == "Response":
             resp_data = cbt.response.data
-            rem_act = cls(resp_data["OverlayId"], resp_data["RecipientId"], resp_data["RecipientCM"],
-                          resp_data["Action"], resp_data["Params"], frm_cbt=cbt,
-                          status=resp_data["Status"], data=resp_data["Data"])
+            rem_act = cls(resp_data["OverlayId"], resp_data["RecipientId"],
+                          resp_data["RecipientCM"], resp_data["Action"], resp_data["Params"], frm_cbt=cbt, status=resp_data["Status"], data=resp_data["Data"])
             rem_act.initiator_cm = resp_data["InitiatorCM"]
             rem_act.initiator_id = resp_data["InitiatorId"]
             rem_act.action_tag = cbt.tag
