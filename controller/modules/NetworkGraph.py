@@ -26,16 +26,38 @@ except ImportError:
 import struct
 import uuid
 
+EdgeTypes = ["CETypeUnknown", "CETypeEnforced", "CETypeSuccessor", "CETypeLongDistance",
+             "CETypeOnDemand", "CETypeIEnforced", "CETypePredecessor", "CETypeILongDistance",
+             "CETypeIOnDemand"]
+EdgeStates = ["CEStateUnknown", "CEStateCreated", "CEStateConnected", "CEStateDisconnected"]
+
+def transpose_edge_type(edge_type):
+    if edge_type == "CETypeEnforced":
+        return "CETypeIEnforced"
+    if edge_type == "CETypeSuccessor":
+        return "CETypePredecessor"
+    if edge_type == "CETypeLongDistance":
+        return "CETypeILongDistance"
+    if edge_type == "CETypeOnDemand":
+        return "CETypeIOnDemand"
+    if edge_type == "CETypeIEnforced":
+        return "CETypeEnforced"
+    if edge_type == "CETypePredecessor":
+        return "CETypeSuccessor"
+    if edge_type == "CETypeILongDistance":
+        return "CETypeLongDistance"
+    if edge_type == "CETypeIOnDemand":
+        return "CETypeOnDemand"
+    return "CETypeUnknown"
+
 class ConnectionEdge():
     """ A discriptor of the edge/link between two peers."""
     _PACK_STR = '!16s16sff18s19s?'
-    _EdgeTypes = ["CETypeUnknown", "CETypeEnforced", "CETypeSuccessor", "CETypeLongDistance",
-                  "CETypePredecessor", "CETypeIncoming"]
-    _EdgeStates = ["CEStateUnknown", "CEStateCreated", "CEStateConnected", "CEStateDisconnected"]
-
-    def __init__(self, peer_id=None, edge_type="CETypeUnknown"):
+    def __init__(self, peer_id=None, edge_id=None, edge_type="CETypeUnknown"):
         self.peer_id = peer_id
-        self._edge_id = uuid.uuid4()
+        self._edge_id = edge_id
+        if not self._edge_id:
+            self._edge_id = uuid.uuid4().hex
         self.created_time = time.time()
         self.connected_time = None
         self.edge_state = "CEStateUnknown"
@@ -87,7 +109,7 @@ class ConnectionEdge():
 
     @property
     def edge_id(self):
-        return self._edge_id.hex
+        return self._edge_id
 
     def serialize(self):
         return struct.pack(ConnectionEdge._PACK_STR, self.peer_id, self.edge_id, self.created_time,
@@ -148,6 +170,9 @@ class ConnEdgeAdjacenctList():
         if peer_id in self.conn_edges:
             return True
         return False
+
+    def __setitem__(self, peer_id, ce):
+        self.conn_edges[peer_id] = ce
 
     def __getitem__(self, peer_id):
         return self.conn_edges[peer_id]

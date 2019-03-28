@@ -44,7 +44,8 @@ class Topology(ControllerModule, CFX):
         nid = self.node_id
         for olid in self._cfx_handle.query_param("Overlays"):
             self._overlays[olid] = dict(NetBuilder=NetworkBuilder(self, olid, nid), KnownPeers=[],
-                                        NewPeerCount=0, Banlist=dict(), OndPeers=[])
+                                        NewPeerCount=0, Banlist=dict(), NegoConnEdges=dict(),
+                                        OndPeers=[])
         try:
             # Subscribe for data request notifications from OverlayVisualizer
             self._cfx_handle.start_subscription("OverlayVisualizer",
@@ -87,7 +88,7 @@ class Topology(ControllerModule, CFX):
                               "Failed to remove topology edge {0}".format(cbt.response.data))
             params = cbt.request.params
             params["UpdateType"] = "RemoveEdgeFailed"
-            params["LinkId"] = None
+            params["TunnelId"] = None
             olid = params["OverlayId"]
             self._overlays[olid]["NetBuilder"].on_connection_update(params)
         self.free_cbt(cbt)
@@ -157,12 +158,12 @@ class Topology(ControllerModule, CFX):
                         adjl = nb.get_adj_list()
                         for k in adjl.conn_edges:
                             ce = adjl.conn_edges[k]
-                            ced = {"PeerId": ce.peer_id, "LinkId": ce.link_id,
+                            ced = {"PeerId": ce.peer_id, "EdgeId": ce.edge_id,
                                    "MarkedForDeleted": ce.marked_for_delete,
                                    "CreatedTime": ce.created_time,
                                    "ConnectedTime": ce.connected_time,
                                    "State": ce.edge_state, "Type": ce.edge_type}
-                            edges[ce.link_id] = ced
+                            edges[ce.edge_id] = ced
                         topo_data[olid] = edges
             cbt.set_response({"Topology": topo_data}, bool(topo_data))
             self.complete_cbt(cbt)
@@ -172,7 +173,7 @@ class Topology(ControllerModule, CFX):
             self.register_cbt("Logger", "LOG_WARNING", "Topology data not available {0}".
                               format(cbt.response.data))
 
-    def req_handler_link_data_update(self, cbt):
+    def req_handler_tnl_data_update(self, cbt):
         params = cbt.request.params
         olid = params["OverlayId"]
         peer_id = params["PeerId"]
@@ -214,9 +215,34 @@ class Topology(ControllerModule, CFX):
             edge_cbt.set_response("Unknown overlay id specified in edge request", False)
             self.complete_cbt(edge_cbt)
             return
-        edge_resp = self._overlays[olid]["NetBuilder"].on_negotiate_edge_req(edge_req)
-        edge_cbt.set_response(edge_resp.data, edge_resp.is_accepted)
-        self.complete_cbt(edge_cbt)
+        #edge_resp = self._overlays[olid]["NetBuilder"].on_negotiate_edge_req(edge_req)
+        #edge_cbt.set_response(edge_resp.data, edge_resp.is_accepted)
+        #self.complete_cbt(edge_cbt)
+        edge_resp, ce = self._overlays[olid]["NetBuilder"].negotiate_incoming_edge(edge_req)
+        if edge_resp.is_accepted:
+            self._overlays[olid]["NegoConnEdges"][ce.peer_id] = (edge_resp, ce)
+            self.register_cbt("Logger", "LOG_DEBUG", "NegoConnEdges={0}".format(self._overlays[olid]["NegoConnEdges"]))
+            self._authorize_edge(olid, ce.peer_id, ce.edge_id, parent_cbt=edge_cbt)
+        else:
+            edge_cbt.set_response(edge_resp.data, False)
+            self.complete_cbt(edge_cbt)
+
+    def resp_handler_auth_tunnel(self, cbt):
+        """ Node B 
+            LNK auth completed, add the CE to Netbuilder and send response to initiator ie., Role A
+        """
+        olid = cbt.request.params["OverlayId"]
+        peer_id = cbt.request.params["PeerId"]
+        if cbt.response.status:
+            edge_resp, ce = self._overlays[olid]["NegoConnEdges"].pop(peer_id)
+            self._overlays[olid]["NetBuilder"].add_incoming_conn_edge(ce)
+        else:
+            self._overlays[olid]["NegoConnEdges"].pop(peer_id)
+            edge_resp = EdgeResponse("Tunnel service unavailable", False)
+        nego_cbt = cbt.parent
+        self.free_cbt(cbt)
+        nego_cbt.set_response(edge_resp.data, edge_resp.is_accepted)
+        self.complete_cbt(nego_cbt)
 
     def resp_handler_remote_action(self, cbt):
         """ Role Node A, initiate edge creation on successful neogtiation """
@@ -238,6 +264,7 @@ class Topology(ControllerModule, CFX):
             self.register_cbt("Logger", "LOG_WARNING", "Unrecognized remote action {0}"
                               .format(rem_act.action))
 
+
     def process_cbt(self, cbt):
         if cbt.op_type == "Request":
             if cbt.request.action == "SIG_PEER_PRESENCE_NOTIFY":
@@ -247,7 +274,7 @@ class Topology(ControllerModule, CFX):
             elif cbt.request.action == "TOP_QUERY_PEER_IDS":
                 self.req_handler_query_peer_ids(cbt)
             elif cbt.request.action == "LNK_TUNNEL_EVENTS":
-                self.req_handler_link_data_update(cbt)
+                self.req_handler_tnl_data_update(cbt)
             elif cbt.request.action == "TOP_INCOMING_TUNNEL_REQ":
                 self.request_handler_tunnel_req(cbt)
             elif cbt.request.action == "TOP_REQUEST_OND_TUNNEL":
@@ -263,6 +290,8 @@ class Topology(ControllerModule, CFX):
                 self.resp_handler_remove_tnl(cbt)
             elif cbt.request.action == "SIG_REMOTE_ACTION":
                 self.resp_handler_remote_action(cbt)
+            elif cbt.request.action == "LNK_AUTH_TUNNEL":
+                self.resp_handler_auth_tunnel(cbt)
             else:
                 parent_cbt = cbt.parent
                 cbt_data = cbt.response.data
@@ -306,6 +335,15 @@ class Topology(ControllerModule, CFX):
         else:
             self.register_cbt("Logger", "LOG_DEBUG", "Net builder busy, skipping...")
 
+    def _authorize_edge(self, overlay_id, peer_id, edge_id, parent_cbt):
+        self.register_cbt("Logger", "LOG_INFO", "Authorizing peer edge {0}:{1}->{2}"
+                          .format(overlay_id, self.node_id[:7], peer_id[:7]))
+        params = {"OverlayId": overlay_id, "PeerId": peer_id, "TunnelId": edge_id}
+        cbt = self.create_linked_cbt(parent_cbt)
+        cbt.set_request(self.module_name, "LinkManager", "LNK_AUTH_TUNNEL", params)
+        self.submit_cbt(cbt)
+
+
     def manage_topology(self):
         # Periodically refresh the topology, making sure desired links exist and exipred ones are
         # removed.
@@ -317,12 +355,6 @@ class Topology(ControllerModule, CFX):
     def timer_method(self):
         with self._lock:
             self.manage_topology()
-
-    def top_authorize_edge(self, overlay_id, peer_id, edge_id):
-        self.register_cbt("Logger", "LOG_INFO", "Authorizing peer edge {0}:{1}->{2}"
-                          .format(overlay_id, self.node_id[:7], peer_id[:7]))
-        params = {"OverlayId": overlay_id, "PeerId": peer_id, "TunnelId": edge_id}
-        self.register_cbt("LinkManager", "LNK_AUTH_TUNNEL", params)
 
     def top_add_edge(self, overlay_id, peer_id, edge_id):
         """

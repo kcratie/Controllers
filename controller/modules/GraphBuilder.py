@@ -46,7 +46,7 @@ class GraphBuilder():
 
     def _build_enforced(self, adj_list):
         for peer_id in self._enforced:
-            ce = ConnectionEdge(peer_id, "CETypeEnforced")
+            ce = ConnectionEdge(peer_id, None, "CETypeEnforced")
             adj_list.add_connection_edge(ce)
 
     def _get_successors(self):
@@ -69,7 +69,7 @@ class GraphBuilder():
         for peer_id in successors:
             #exclude if peer was previously added as another edge type
             if peer_id not in adj_list.conn_edges:
-                ce = ConnectionEdge(peer_id, "CETypeSuccessor")
+                ce = ConnectionEdge(peer_id, None, "CETypeSuccessor")
                 adj_list.add_connection_edge(ce)
 
     @staticmethod
@@ -110,7 +110,7 @@ class GraphBuilder():
         for peer_id in ldl:
             if self._max_ldl_cnt - existing_ldlnk_cnt > 0:
                 if peer_id not in adj_list.conn_edges:
-                    ce = ConnectionEdge(peer_id, "CETypeLongDistance")
+                    ce = ConnectionEdge(peer_id, None, "CETypeLongDistance")
                     adj_list.add_connection_edge(ce)
                     existing_ldlnk_cnt += 1
             else:
@@ -122,7 +122,7 @@ class GraphBuilder():
             if op == "ADD":
                 if peer_id in self._peers and (peer_id not in adj_list or
                                                peer_id not in transition_adj_list):
-                    ce = ConnectionEdge(peer_id, "CETypeOnDemand")
+                    ce = ConnectionEdge(peer_id, None, "CETypeOnDemand")
                     adj_list.add_connection_edge(ce)
                     tmp.append(peer_id)
             elif op == "REMOVE":

@@ -110,7 +110,7 @@ class SDNInterface(ControllerModule):
         with self._lock:
             for olid in self._adj_lists:
                 for peer_id in self._adj_lists[olid]:
-                    tnlid = self._adj_lists[olid][peer_id]["link_id"]
+                    tnlid = self._adj_lists[olid][peer_id]["edge_id"]
                     if not resp_data.get(tnlid, None):
                         discard.append((olid, peer_id))
                     else:
