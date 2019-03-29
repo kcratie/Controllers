@@ -63,18 +63,19 @@ CONFIG = {
     },
     "Signal": {
         "Enabled": True,
-        "TimerInterval": 60,
+        "TimerInterval": 30,
         "CacheExpiry": 30,         # Min duration an entry remains in the JID cache in seconds
         "Dependencies": ["Logger"]
     },
     "LinkManager": {
         "Enabled": True,
-        "TimerInterval": 60,        # Timer thread interval in sec
-        "Dependencies": ["Logger", "TincanInterface", "Signal"]
+        "Dependencies": ["Logger", "TincanInterface", "Signal"],
+        "TimerInterval": 30,        # Timer thread interval in sec
+        "LinkSetupTimeout": 120
     },
     "Topology": {
         "Enabled": True,
-        "TimerInterval": 60,
+        "TimerInterval": 30,
         "PeerDiscoveryCoalesce": 3,
         "Dependencies": ["Logger", "TincanInterface", "LinkManager"]
     },

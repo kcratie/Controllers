@@ -119,7 +119,7 @@ class ConnectionEdge():
     @classmethod
     def from_bytes(cls, data):
         ce = cls()
-        (ce.peer_id, ce.edge_id, ce.created_time, ce.connected_time, ce.edge_state,
+        (ce.peer_id, ce._edge_id, ce.created_time, ce.connected_time, ce.edge_state,
          ce.edge_type, ce.marked_for_delete) = struct.unpack_from(cls._PACK_STR, data)
         return ce
 
@@ -136,7 +136,7 @@ class ConnectionEdge():
         ce = cls()
         jce = json.loads(json_str)
         ce.peer_id = jce["peer_id"]
-        ce.edge_id = jce["edge_id"]
+        ce._edge_id = jce["edge_id"]
         ce.created_time = jce["created_time"]
         ce.connected_time = jce["connected_time"]
         ce.edge_state = jce["edge_state"]
@@ -166,6 +166,9 @@ class ConnEdgeAdjacenctList():
                %(self.overlay_id, self.node_id, self.conn_edges)
         return msg
 
+    def __bool__(self):
+        return bool(self.conn_edges)
+
     def __contains__(self, peer_id):
         if peer_id in self.conn_edges:
             return True
@@ -179,6 +182,9 @@ class ConnEdgeAdjacenctList():
 
     def __delitem__(self, peer_id):
         del self.conn_edges[peer_id]
+
+    def __iter__(self):
+        return self.conn_edges.__iter__()
 
     @property
     def threshold(self):

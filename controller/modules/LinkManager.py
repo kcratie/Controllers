@@ -21,7 +21,6 @@
 
 import os
 import threading
-import uuid
 import time
 from controller.framework.ControllerModule import ControllerModule
 from controller.framework.ipoplib import RemoteAction
@@ -35,8 +34,8 @@ class Link():
         self.stats = {}
 
     def __repr__(self):
-        state = "lnkid=%s, creation_state=%s, status_retry=%s, stats=%s" % \
-                self.lnkid, self._creation_state, self.status_retry, self.stats
+        state = "Link<lnkid=%s, creation_state=0x%02x, status_retry=%s, stats=%s>" % \
+                (self.lnkid[:7], self._creation_state, self.status_retry, self.stats)
         return state
 
     @property
@@ -64,8 +63,8 @@ class Tunnel():
     def __repr__(self):
         state = "Tunnel<tnlid=%s, overlay_id=%s, peer_id=%s, tap_name=%s, mac=%s, fpr=%s, link=%s"\
                 ", peer_mac=%s, tunnel_state=%s, creation_start_time=%s>" % \
-                (self.tnlid, self.overlay_id, self.peer_id, self.tap_name, self.mac, self.fpr,
-                 self.link, self.peer_mac, self.tunnel_state, self.creation_start_time)
+                (self.tnlid[:7], self.overlay_id[:7], self.peer_id[:7], self.tap_name, self.mac,
+                 self.fpr, self.link, self.peer_mac, self.tunnel_state, self.creation_start_time)
         return state
 
     @property
@@ -89,8 +88,7 @@ class LinkManager(ControllerModule):
         self._ignored_net_interfaces = dict()
 
     def __repr__(self):
-        state = "LinkManager<_peers: %s, _tunnels: %s, _links: %s>" % \
-                 (self._peers, self._tunnels, self._links)
+        state = "LinkManager<_peers: %s, _tunnels: %s>" % (self._peers, self._tunnels)
         return state
 
     def initialize(self):
@@ -111,7 +109,7 @@ class LinkManager(ControllerModule):
         for olid in self.config["Overlays"]:
             self._peers[olid] = dict()
             self._ignored_net_interfaces[olid] = set()
-            ol_cfg = self._cm_config["Overlays"][olid]
+            ol_cfg = self.config["Overlays"][olid]
             if "IgnoredNetInterfaces" in ol_cfg:
                 for ign_inf in ol_cfg["IgnoredNetInterfaces"]:
                     self._ignored_net_interfaces[olid].add(ign_inf)
@@ -379,17 +377,17 @@ class LinkManager(ControllerModule):
             "NodeId": self.node_id,
             "TunnelId": tnlid,
             "LinkId": lnkid,
-            "StunServers": self._cm_config["Stun"],
+            "StunServers": self.config["Stun"],
             "Type": ol_type,
             "TapName": tap_name,
-            "IP4": self._cm_config["Overlays"][overlay_id].get("IP4"),
-            "MTU4": self._cm_config["Overlays"][overlay_id].get("MTU4"),
-            "IP4PrefixLen": self._cm_config["Overlays"][overlay_id].get("IP4PrefixLen"),
+            "IP4": self.config["Overlays"][overlay_id].get("IP4"),
+            "MTU4": self.config["Overlays"][overlay_id].get("MTU4"),
+            "IP4PrefixLen": self.config["Overlays"][overlay_id].get("IP4PrefixLen"),
             "IgnoredNetInterfaces": list(
                 self._get_ignored_tap_names(overlay_id, tap_name))
         }
-        if self._cm_config.get("Turn"):
-            create_tnl_params["TurnServers"] = self._cm_config["Turn"]
+        if self.config.get("Turn"):
+            create_tnl_params["TurnServers"] = self.config["Turn"]
 
         if parent_cbt is not None:
             tnl_cbt = self.create_linked_cbt(parent_cbt)
@@ -575,7 +573,7 @@ class LinkManager(ControllerModule):
         tnlid = params["TunnelId"]
         node_data = params["NodeData"]
         peer_id = node_data["UID"]
-        if olid not in self._cm_config["Overlays"]:
+        if olid not in self.config["Overlays"]:
             self.register_cbt("Logger", "LOG_WARNING", "The requested overlay is not specified in "
                               "local config, it will not be created")
             lnk_endpt_cbt.set_response("Unknown overlay id specified in request", False)
@@ -779,7 +777,7 @@ class LinkManager(ControllerModule):
         self.register_cbt("Logger", "LOG_DEBUG", "Create Link:{} Phase 3/4 Node B - Peer: {}"
                           .format(lnkid[:7], peer_id[:7]))
         lcbt = self.create_linked_cbt(cbt)
-        params["Type"] = self._cm_config["Overlays"][olid]["Type"]
+        params["Type"] = self.config["Overlays"][olid]["Type"]
         lcbt.set_request(self.module_name, "TincanInterface", "TCI_CREATE_LINK", params)
         self.submit_cbt(lcbt)
 
@@ -971,7 +969,7 @@ class LinkManager(ControllerModule):
                         self.complete_cbt(parent_cbt)
 
     def _cleanup_expired_incomplete_links(self):
-        link_expire = 4*self._cm_config["TimerInterval"]
+        link_expire = self.config["LinkSetupTimeout"]
         link_ids = list(self._tunnels.keys())
         for lnkid in link_ids:
             tnl = self._tunnels[lnkid]
