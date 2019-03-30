@@ -735,9 +735,8 @@ class RingRoute(app_manager.RyuApp):
 
     def update_leaf_macs_and_flows(self, datapath, rnid, macs, num_items, ingress):
         self.lt.rnid_tbl[rnid].clear()
-        # hack until the trailing bytes are identified
-        len = num_items*6
-        for mactup in struct.iter_unpack("!6s", macs[:len]):
+        mlen = num_items*6
+        for mactup in struct.iter_unpack("!6s", macs[:mlen]):
             macstr = mac_lib.haddr_to_str(mactup[0])
             self.lt.rnid_tbl[rnid].add(macstr)
             self.logger.info("Added leaf mac %s to rnid %s", macstr, rnid)

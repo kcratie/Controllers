@@ -34,11 +34,17 @@ class DiscoveredPeer():
     ExclusionBaseInterval = 60
     def __init__(self, peer_id, is_excluded=False, successive_failures=0,
                  removal_time=time.time()):
-       self.peer_id = peer_id
-       self._is_excluded = is_excluded
-       self.successive_fails = successive_failures
-       self.removal_time = removal_time
-        
+        self.peer_id = peer_id
+        self._is_excluded = is_excluded
+        self.successive_fails = successive_failures
+        self.removal_time = removal_time
+
+    def __repr__(self):
+        state = "DiscoveredPeer<peer_id=%s, _is_excluded=%s, successive_fails=%s, removal_time=%s"\
+                ">" % (self.peer_id[:7], self._is_excluded, self.successive_fails,
+                       self.removal_time)
+        return state
+
     def exclude(self):
         self.successive_fails += 1
         self.removal_time = (random.randint(0, 5) * DiscoveredPeer.ExclusionBaseInterval *
@@ -134,9 +140,9 @@ class Topology(ControllerModule, CFX):
         with self._lock:
             disc = self._net_ovls[olid]["KnownPeers"].get(peer_id)
             if not disc:
-                 disc = DiscoveredPeer(peer_id, False, 0, time.time())
-                 self._net_ovls[olid]["KnownPeers"][peer_id] = disc
-                 new_disc = True
+                disc = DiscoveredPeer(peer_id, False, 0, time.time())
+                self._net_ovls[olid]["KnownPeers"][peer_id] = disc
+                new_disc = True
             if new_disc or disc.is_excluded:
                 self._net_ovls[olid]["NewPeerCount"] += 1
                 nb = self._net_ovls[olid]["NetBuilder"]
@@ -237,8 +243,8 @@ class Topology(ControllerModule, CFX):
         olid = cbt.request.params[0]
         peer = (cbt.request.params[1], cbt.request.params[2])
         with self._lock:
-            if ((olid in self._net_ovls) and (peer[0] in self._net_ovls[olid]["KnownPeers"]) and
-                (not self._net_ovls[olid]["KnownPeers"][peer[0]].is_excluded)):
+            if (olid in self._net_ovls and peer[0] in self._net_ovls[olid]["KnownPeers"] and
+                    not self._net_ovls[olid]["KnownPeers"][peer[0]].is_excluded):
                 self._net_ovls[olid]["OndPeers"].append(peer)
             else:
                 self.register_cbt("Logger", "LOG_WARNING", "Invalid on demand tunnel request "
@@ -344,20 +350,6 @@ class Topology(ControllerModule, CFX):
                     parent_cbt.set_response(cbt_data, cbt_status)
                     self.complete_cbt(parent_cbt)
 
-    #def _cleanup_exclusion_list(self):
-    #    # Remove peers from the duration based exclusion_list. Higher successive connection failures
-    #    # results in potentially longer duration in the exclusion_list.
-    #    tmp = []
-    #    for olid in self._net_ovls:
-    #        for peer_id in self._net_ovls[olid]["Exclude"]:
-    #            rt = self._net_ovls[olid]["Exclude"][peer_id]["RemovalTime"]
-    #            if rt >= time.time():
-    #                tmp.append(peer_id)
-    #        for peer_id in tmp:
-    #            self._net_ovls[olid]["Exclude"].pop(peer_id, None)
-    #            self.register_cbt("Logger", "LOG_INFO",
-    #                              "Node {0} removed from exclusion_list".format(peer_id[:7]))
-
     def _update_overlay(self, olid):
         nb = self._net_ovls[olid]["NetBuilder"]
         if nb.is_ready:
@@ -393,7 +385,6 @@ class Topology(ControllerModule, CFX):
     def manage_topology(self):
         # Periodically refresh the topology, making sure desired links exist and exipred ones are
         # removed.
-        #self._cleanup_exclusion_list()
         for olid in self._net_ovls:
             self._update_overlay(olid)
 
@@ -422,8 +413,6 @@ class Topology(ControllerModule, CFX):
 
     def top_send_negotiate_edge_req(self, edge_req):
         """Role Node A, Send a request to create an edge to the peer """
-        # overlay_id, peer_id, edge_type
-        #edge_params = {"OverlayId": overlay_id, "EdgeType": edge_type, "UID": self.node_id}
         edge_params = edge_req._asdict()
         rem_act = RemoteAction(edge_req.overlay_id, recipient_id=edge_req.recipient_id,
                                recipient_cm="Topology", action="TOP_NEGOTIATE_EDGE",

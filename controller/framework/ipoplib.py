@@ -19,7 +19,6 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 # THE SOFTWARE.
 
-from distutils import spawn
 import subprocess
 import sys
 
@@ -329,9 +328,9 @@ class RemoteAction():
         ra_desc = dict(self)
         if self._parent_cbt is not None:
             endp_cbt = cm.create_linked_cbt(self._parent_cbt)
-            endp_cbt.set_request(cm._module_name, "Signal", "SIG_REMOTE_ACTION", ra_desc)
+            endp_cbt.set_request(cm.module_name, "Signal", "SIG_REMOTE_ACTION", ra_desc)
         else:
-            endp_cbt = cm.create_cbt(cm._module_name, "Signal", "SIG_REMOTE_ACTION", ra_desc)
+            endp_cbt = cm.create_cbt(cm.module_name, "Signal", "SIG_REMOTE_ACTION", ra_desc)
         cm.submit_cbt(endp_cbt)
 
     @classmethod
@@ -346,7 +345,8 @@ class RemoteAction():
         elif cbt.op_type == "Response":
             resp_data = cbt.response.data
             rem_act = cls(resp_data["OverlayId"], resp_data["RecipientId"],
-                          resp_data["RecipientCM"], resp_data["Action"], resp_data["Params"], frm_cbt=cbt, status=resp_data["Status"], data=resp_data["Data"])
+                          resp_data["RecipientCM"], resp_data["Action"], resp_data["Params"],
+                          frm_cbt=cbt, status=resp_data["Status"], data=resp_data["Data"])
             rem_act.initiator_cm = resp_data["InitiatorCM"]
             rem_act.initiator_id = resp_data["InitiatorId"]
             rem_act.action_tag = cbt.tag

@@ -89,10 +89,10 @@ class OvsBridge(BridgeABC):
 
         try:
             ipoplib.runshell([OvsBridge.brctl, "set", "int", self.name,
-                                  "mtu_request=" + str(self.mtu)])
+                              "mtu_request=" + str(self.mtu)])
         except RuntimeError as e:
-            self.cm.register_cbt("Logger", "LOG_WARN", "The following error occurred while setting "
-                              "MTU for OVS bridge: {0}".format(e))
+            self.cm.register_cbt("Logger", "LOG_WARN", "The following error occurred while setting"
+                                 " MTU for OVS bridge: {0}".format(e))
 
         self.stp(stp_enable)
         ipoplib.runshell([OvsBridge.iptool, "link", "set", "dev", self.name, "up"])
@@ -145,7 +145,7 @@ class OvsBridge(BridgeABC):
 
     def add_patch_port(self, peer_patch_port):
         iface_opt = "options:peer={0}".format(peer_patch_port)
-        ipoplib.runshell([OvsBridge.brctl, 
+        ipoplib.runshell([OvsBridge.brctl,
                           "--may-exist", "add-port", self.name, self._patch_port,
                           "--", "set", "interface", self._patch_port, "type=patch", iface_opt])
 

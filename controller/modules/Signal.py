@@ -186,7 +186,7 @@ class XmppTransport(sleekxmpp.ClientXMPP):
                 if (status != "" and "#" in status):
                     pstatus, peer_id = status.split("#")
                     if pstatus == "ident":
-                        if peer_id == self._sig._cm_config["NodeId"]:
+                        if peer_id == self._sig.config["NodeId"]:
                             return
                         # a notification of a peers node id to jid mapping
                         pts = self._jid_cache.add_entry(node_id=peer_id, jid=presence_sender)
@@ -437,8 +437,8 @@ class Signal(ControllerModule):
                 #    self._circles[overlay_id]["Transport"].send_presence(pstatus="ident#" +
                 #                                                         self.node_id)
                 self._circles[overlay_id]["JidCache"].scavenge()
-                self.scavenge_jid_resolution_queue(self._circles[overlay_id]
-                                                    ["OutgoingRemoteActs"])
+                self.scavenge_expired_outgoing_rem_acts(self._circles[overlay_id]
+                                                        ["OutgoingRemoteActs"])
             self.scavenge_pending_cbts()
 
     def terminate(self):
@@ -459,11 +459,13 @@ class Signal(ControllerModule):
                 pending_cbt.set_response("The request has expired", False)
                 self.complete_cbt(pending_cbt)
 
-    def scavenge_jid_resolution_queue(self, outgoing_rem_acts):
+    def scavenge_expired_outgoing_rem_acts(self, outgoing_rem_acts):
         # clear out the JID Refresh queue for a peer if the oldest entry age exceeds the limit
         peer_ids = []
         for peer_id in outgoing_rem_acts:
             peer_qlen = outgoing_rem_acts[peer_id].qsize()
+            if not outgoing_rem_acts[peer_id].queue:
+                break
             remact_descr = outgoing_rem_acts[peer_id].queue[0] # peek at the first/oldest entry
             if time.time() - remact_descr[2] < self.request_timeout:
                 peer_ids.append(peer_id)

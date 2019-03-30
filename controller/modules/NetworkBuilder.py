@@ -52,9 +52,7 @@ class NetworkBuilder():
             return self._is_ready()
 
     def _is_ready(self):
-        if self._pending_adj_list is None or len(self._pending_adj_list) == 0:
-            return True
-        return False
+        return not bool(self._pending_adj_list)
 
     def _is_max_concurrent_workload(self):
         return self._refresh_in_progress >= self._max_concurrent_wrkload
@@ -97,7 +95,8 @@ class NetworkBuilder():
             if connection_event["UpdateType"] == "CREATING":
                 conn_edge = self._current_adj_list.conn_edges.get(peer_id, None)
                 if not conn_edge:
-                    assert False, "CE={0} for incoming edge should have been pre negotiated!".format(edge_id)
+                    assert False, "CE={0} for incoming edge should have been pre negotiated!"\
+                        .format(edge_id)
                     # this happens when the neighboring peer initiates the connection bootstrap
                     self._refresh_in_progress += 1
                     conn_edge = ConnectionEdge(peer_id, None, "CETypePredecessor")
@@ -226,7 +225,7 @@ class NetworkBuilder():
             ce = self._current_adj_list.conn_edges[peer_id]
             ce.edge_edge_type = ng.transpose_edge_type(edge_req.edge_type)
             msg = "Edge collision override accepted. Tnl remap {0}->{1}"\
-                .format(ce._edge_id, edge_req.edge_id)
+                .format(ce.edge_id, edge_req.edge_id)
             ce._edge_id = edge_req.edge_id
             edge_resp = EdgeResponse(is_accepted=True, data=msg)
             self._top.top_log(msg)

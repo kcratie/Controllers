@@ -72,6 +72,13 @@ class Tunnel():
                  self.fpr, self.link, self.peer_mac, self.tunnel_state, self.creation_start_time)
         return state
 
+    def __str__(self):
+        state = "Tunnel<tnlid=%s, overlay_id=%s, peer_id=%s, tap_name=%s, mac=%s, link=%s, "\
+                "peer_mac=%s, tunnel_state=%s, creation_start_time=%s>" % \
+                (self.tnlid[:7], self.overlay_id[:7], self.peer_id[:7], self.tap_name, self.mac,
+                 self.link, self.peer_mac, self.tunnel_state, self.creation_start_time)
+        return state
+
     @property
     def tunnel_state(self):
         return self._tunnel_state
@@ -713,9 +720,9 @@ class LinkManager(ControllerModule):
         Send the Createlink control to local Tincan
         """
         # Create Link: Phase 5 Node A
-        lnkid = rem_act["Data"]["LinkId"]
+        lnkid = rem_act.data["LinkId"]
         tnlid = self.tunnel_id(lnkid)
-        peer_id = rem_act["RecipientId"]
+        peer_id = rem_act.recipient_id
         if tnlid not in self._tunnels:
             # abort the handshake as the process timed out
             parent_cbt.set_response("Tunnel creation timeout failure", False)
@@ -724,8 +731,8 @@ class LinkManager(ControllerModule):
         self._tunnels[tnlid].link.creation_state = 0xA3
         self.register_cbt("Logger", "LOG_DEBUG", "Create Link:{} Phase 3/5 Node A - Peer: {}"
                           .format(lnkid[:7], peer_id[:7]))
-        node_data = rem_act["Data"]["NodeData"]
-        olid = rem_act["OverlayId"]
+        node_data = rem_act.data["NodeData"]
+        olid = rem_act.overlay_id
         # add the peer MAC to the tunnel descr
         self._tunnels[tnlid].peer_mac = node_data["MAC"]
         cbt_params = {"OverlayId": olid, "TunnelId": tnlid, "LinkId": lnkid, "Type": "TUNNEL",
@@ -852,11 +859,14 @@ class LinkManager(ControllerModule):
             parent_cbt.set_response(resp_data, False)
             self.complete_cbt(parent_cbt)
         else:
-            rem_act = cbt.response.data
+            #rem_act = cbt.response.data
+            rem_act = RemoteAction.from_cbt(cbt)
             self.free_cbt(cbt)
-            if rem_act["Action"] == "LNK_REQ_LINK_ENDPT":
+            #if rem_act["Action"] == "LNK_REQ_LINK_ENDPT":
+            if rem_act.action == "LNK_REQ_LINK_ENDPT":
                 self._create_link_endpoint(rem_act, parent_cbt)
-            elif rem_act["Action"] == "LNK_ADD_PEER_CAS":
+            #elif rem_act["Action"] == "LNK_ADD_PEER_CAS":
+            elif rem_act.action == "LNK_ADD_PEER_CAS":
                 self._complete_create_link_request(parent_cbt)
 
     def req_handler_tincan_msg(self, cbt):
