@@ -120,6 +120,7 @@ class NetworkBuilder():
                 self._top.top_remove_edge(overlay_id, peer_id)
             elif connection_event["UpdateType"] == "RemoveEdgeFailed":
                 # leave the node in the adj list and marked for removal to be retried.
+                #self._current_adj_list.conn_edges.pop(peer_id, None)
                 self._refresh_in_progress -= 1
             else:
                 self._top.top_log("Invalid UpdateType specified for connection update",
@@ -129,24 +130,27 @@ class NetworkBuilder():
             self._process_pending_adj_list()
 
     def _mark_edges_for_removal(self):
-        """ Anything edge the set (Active - Pending) is marked for deletion """
+        """
+        Anything edge the set (Active - Pending) is marked for deletion but do not remove
+        negotiated edges.
+        """
         for peer_id in self._current_adj_list:
-            if (peer_id not in self._pending_adj_list and
-                    self._current_adj_list.conn_edges[peer_id].edge_type != "CETypePredecessor"):
+            if not (self._current_adj_list[peer_id].edge_type in ng.EdgeTypes2 or peer_id in
+                    self._pending_adj_list):
                 self._current_adj_list.conn_edges[peer_id].marked_for_delete = True
 
     def _remove_edges(self):
-        """ Minimize churn by removing a single connection per refresh. Only initiate removal of a
-        successor edge if a replacement has been previously connected.
+        """
+        Minimize churn by removing a single connection per refresh. Only initiate removal of an
+        edge if it is not the first successor.
         """
         overlay_id = self._current_adj_list.overlay_id
-        conn_succ = self._current_adj_list.filter("CETypeSuccessor", "CEStateConnected")
-        num_conn_succ = len(conn_succ)
-        for peer_id in self._current_adj_list.conn_edges:
+        if len(self._current_adj_list) < self._current_adj_list.edge_threshold:
+            return # don't start deleting links until at the threshold
+        for peer_id in self._current_adj_list:
             if self._current_adj_list.conn_edges[peer_id].marked_for_delete:
-                if (self._current_adj_list.conn_edges[peer_id].edge_type != "CETypeSuccessor" or
-                        (self._current_adj_list.conn_edges[peer_id].edge_type == "CETypeSuccessor"
-                         and num_conn_succ > self._current_adj_list.max_successors)):
+                if (self._current_adj_list.successor_ce and peer_id !=
+                        self._current_adj_list.successor_ce.peer_id):
                     self._refresh_in_progress += 1
                     self._top.top_remove_edge(overlay_id, peer_id)
                     return
@@ -156,10 +160,16 @@ class NetworkBuilder():
         #overlay_id = self._current_adj_list.overlay_id
         rmv_list = []
         for peer_id in self._pending_adj_list:
-            if self._is_max_concurrent_workload(): break
-            if peer_id not in self._current_adj_list.conn_edges:
+            if self._pending_adj_list[peer_id].edge_type in ng.EdgeTypes2:
+                # negotiated edge in the pending list will be discarded
                 rmv_list.append(peer_id)
-                if peer_id in self._negotiated_edges: continue
+                continue
+            if self._is_max_concurrent_workload():
+                break
+            rmv_list.append(peer_id)
+            if peer_id not in self._current_adj_list.conn_edges:
+                if peer_id in self._negotiated_edges:
+                    continue
                 self._current_adj_list.conn_edges[peer_id] = \
                     self._pending_adj_list.conn_edges[peer_id]
                 assert self._current_adj_list.conn_edges[peer_id].edge_state == "CEStateUnknown"
@@ -167,13 +177,7 @@ class NetworkBuilder():
                 self._negotiate_new_edge(self._pending_adj_list.conn_edges[peer_id].edge_id,
                                          self._pending_adj_list.conn_edges[peer_id].edge_type,
                                          peer_id)
-            else:
-                # Existing edges in both Active and Pending are updated in place. Only the marked
-                # for delete and edge type fields can be meaningfully changed in this case.
-                self._current_adj_list.conn_edges[peer_id].marked_for_delete = \
-                   self._pending_adj_list.conn_edges[peer_id].marked_for_delete
-                self._current_adj_list.conn_edges[peer_id].edge_type = \
-                   self._pending_adj_list.conn_edges[peer_id].edge_type
+
         for peer_id in rmv_list:
             del self._pending_adj_list[peer_id]
 
@@ -187,10 +191,11 @@ class NetworkBuilder():
                              format(self._current_adj_list.overlay_id,
                                     self._pending_adj_list.overlay_id))
 
+        self._mark_edges_for_removal()
         if not self._is_max_concurrent_workload():
             self._create_new_edges()
-        #self._mark_edges_for_removal()
-        #self._remove_edges()
+            # edges in both pending and current are left as is, no updates
+            self._remove_edges()
         else:
             self._top.top_log("Netbuilder busy")
 
@@ -237,14 +242,14 @@ class NetworkBuilder():
             if peer_id in self._current_adj_list.conn_edges:
                 edge_resp = self._resolve_request_collision(edge_req)
 
-            elif len(self._current_adj_list) >= (2*self._current_adj_list.threshold):
+            elif len(self._current_adj_list) >= (2*self._current_adj_list.edge_threshold):
                 edge_resp = EdgeResponse(is_accepted=False, data="E3 - Too many existing edges")
 
-            elif (len(self._current_adj_list) < (2*self._current_adj_list.threshold) and
+            elif (len(self._current_adj_list) < (2*self._current_adj_list.edge_threshold) and
                   edge_req.edge_type == "CETypeSuccessor"):
                 edge_resp = EdgeResponse(is_accepted=True, data="Successor edge permitted")
 
-            elif len(self._current_adj_list) < self._current_adj_list.threshold:
+            elif len(self._current_adj_list) < self._current_adj_list.edge_threshold:
                 edge_resp = EdgeResponse(is_accepted=True, data="Any edge permitted")
 
             if edge_resp.is_accepted:

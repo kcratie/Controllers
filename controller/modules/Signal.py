@@ -273,7 +273,7 @@ class Signal(ControllerModule):
         self._remote_acts = {}
         self._lock = threading.Lock()
         self.request_timeout = self._cm_config["TimerInterval"] - 1
-        self._timer_loop_cnt = 1
+        self._scavenge_timer = time.time()
 
     def _create_transport_instance(self, overlay_id, overlay_descr, jid_cache, outgoing_rem_acts):
         xport = XmppTransport.factory(overlay_id, overlay_descr, self, self._presence_publisher,
@@ -286,7 +286,9 @@ class Signal(ControllerModule):
         for overlay_id in self._cm_config["Overlays"]:
             overlay_descr = self._cm_config["Overlays"][overlay_id]
             self._circles[overlay_id] = {}
-            self._circles[overlay_id]["JidCache"] = JidCache(self, self._cm_config["CacheExpiry"])
+            self._circles[overlay_id]["PresenceTimer"] = time.time()
+            self._circles[overlay_id]["JidCache"] = \
+                JidCache(self, self._cm_config["CacheExpiry"])
             self._circles[overlay_id]["OutgoingRemoteActs"] = {}
             self._circles[overlay_id]["Transport"] = \
                 self._create_transport_instance(overlay_id, overlay_descr,
@@ -430,12 +432,13 @@ class Signal(ControllerModule):
     def timer_method(self):
         with self._lock:
             for overlay_id in self._circles:
-                self._circles[overlay_id]["Transport"].send_presence(pstatus="ident#" +
-                                                                     self.node_id)
-                if self._timer_loop_cnt % 10 == 0:
-                    self._circles[overlay_id]["JidCache"].scavenge()
-                    self.scavenge_jid_resolution_queue(self._circles[overlay_id]
-                                                       ["OutgoingRemoteActs"])
+                #pt = self._circles[overlay_id]["PresenceTimer"]
+                #if time.time() - pt >= int(self.config["PresenceInterval"]):
+                #    self._circles[overlay_id]["Transport"].send_presence(pstatus="ident#" +
+                #                                                         self.node_id)
+                self._circles[overlay_id]["JidCache"].scavenge()
+                self.scavenge_jid_resolution_queue(self._circles[overlay_id]
+                                                    ["OutgoingRemoteActs"])
             self.scavenge_pending_cbts()
 
     def terminate(self):

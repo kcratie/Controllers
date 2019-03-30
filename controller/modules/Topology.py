@@ -30,12 +30,39 @@ from controller.modules.NetworkBuilder import EdgeNegotiate
 from controller.modules.GraphBuilder import GraphBuilder
 from controller.framework.ipoplib import RemoteAction
 
+class DiscoveredPeer():
+    ExclusionBaseInterval = 60
+    def __init__(self, peer_id, is_excluded=False, successive_failures=0,
+                 removal_time=time.time()):
+       self.peer_id = peer_id
+       self._is_excluded = is_excluded
+       self.successive_fails = successive_failures
+       self.removal_time = removal_time
+        
+    def exclude(self):
+        self.successive_fails += 1
+        self.removal_time = (random.randint(0, 5) * DiscoveredPeer.ExclusionBaseInterval *
+                             self.successive_fails) + time.time()
+        self._is_excluded = True
+
+    def restore(self):
+        self._is_excluded = False
+        self.successive_fails = 0
+
+    @property
+    def is_excluded(self):
+        return self._is_excluded and time.time() < self.removal_time
+
 class Topology(ControllerModule, CFX):
     def __init__(self, cfx_handle, module_config, module_name):
         super(Topology, self).__init__(cfx_handle, module_config, module_name)
-        self._overlays = {}
+        self._net_ovls = {}
         self._lock = threading.Lock()
         self._topo_changed_publisher = None
+
+    def __repr__(self):
+        state = "Topology<overlays=%s>" % (self._net_ovls)
+        return state
 
     def initialize(self):
         self._topo_changed_publisher = self._cfx_handle.publish_subscription("TOP_TOPOLOGY_CHANGE")
@@ -47,9 +74,9 @@ class Topology(ControllerModule, CFX):
             MaxLongDistEdges = int(self.config["Overlays"][olid].get("MaxLongDistEdges", 2))
             thres = self.config["Overlays"][olid].get(
                 "MaxConcurrentEdgeSetup", int(MaxSuccessors + MaxLongDistEdges))
-            self._overlays[olid] = dict(NetBuilder=NetworkBuilder(self, olid, nid, thres),
-                                        KnownPeers=[], NewPeerCount=0, Banlist=dict(),
-                                        NegoConnEdges=dict(), OndPeers=[])
+            self._net_ovls[olid] = dict(NetBuilder=NetworkBuilder(self, olid, nid, thres),
+                                        KnownPeers={}, NewPeerCount=0, NegoConnEdges=dict(),
+                                        OndPeers=[])
         try:
             # Subscribe for data request notifications from OverlayVisualizer
             self._cfx_handle.start_subscription("OverlayVisualizer",
@@ -66,7 +93,7 @@ class Topology(ControllerModule, CFX):
 
     def _do_topo_change_post(self, overlay_id):
         # create and post the dict of adjacent connection edges
-        adjl = self._overlays[overlay_id]["NetBuilder"].get_adj_list()
+        adjl = self._net_ovls[overlay_id]["NetBuilder"].get_adj_list()
         topo = {}
         for peer_id in adjl.conn_edges:
             if adjl.conn_edges[peer_id].edge_state == "CEStateConnected":
@@ -81,9 +108,7 @@ class Topology(ControllerModule, CFX):
         if not cbt.response.status:
             self.register_cbt("Logger", "LOG_WARNING", "Failed to create topology edge to {0}. {1}"
                               .format(cbt.request.params["PeerId"], cbt.response.data))
-            interval = self._cm_config["TimerInterval"]
-            self._overlays[olid]["Banlist"][peer_id] = \
-                {"RemovalTime": (random.randint(0, 5) * interval) + time.time()}
+            self._net_ovls[olid]["KnownPeers"][peer_id].exclude()
         self.free_cbt(cbt)
 
     def resp_handler_remove_tnl(self, cbt):
@@ -94,7 +119,7 @@ class Topology(ControllerModule, CFX):
             params["UpdateType"] = "RemoveEdgeFailed"
             params["TunnelId"] = None
             olid = params["OverlayId"]
-            self._overlays[olid]["NetBuilder"].update_edge_state(params)
+            self._net_ovls[olid]["NetBuilder"].update_edge_state(params)
         self.free_cbt(cbt)
 
     def req_handler_peer_presence(self, cbt):
@@ -105,19 +130,24 @@ class Topology(ControllerModule, CFX):
         peer = cbt.request.params
         peer_id = peer["PeerId"]
         olid = peer["OverlayId"]
+        new_disc = False
         with self._lock:
-            if peer_id not in self._overlays[olid]["KnownPeers"]:
-                self._overlays[olid]["KnownPeers"].append(peer_id)
-                self._overlays[olid]["NewPeerCount"] += 1
-                nb = self._overlays[olid]["NetBuilder"]
-                if (nb.is_ready and self._overlays[olid]["NewPeerCount"]
+            disc = self._net_ovls[olid]["KnownPeers"].get(peer_id)
+            if not disc:
+                 disc = DiscoveredPeer(peer_id, False, 0, time.time())
+                 self._net_ovls[olid]["KnownPeers"][peer_id] = disc
+                 new_disc = True
+            if new_disc or disc.is_excluded:
+                self._net_ovls[olid]["NewPeerCount"] += 1
+                nb = self._net_ovls[olid]["NetBuilder"]
+                if (nb.is_ready and self._net_ovls[olid]["NewPeerCount"]
                         >= self._cm_config["PeerDiscoveryCoalesce"]):
                     self.register_cbt("Logger", "LOG_DEBUG", "Coalesced {0} new peer discovery, "
                                       "initiating network refresh"
-                                      .format(self._overlays[olid]["NewPeerCount"]))
+                                      .format(self._net_ovls[olid]["NewPeerCount"]))
                     enf_lnks = self._cm_config["Overlays"][olid].get("EnforcedLinks", {})
-                    peer_list = [item for item in self._overlays[olid]["KnownPeers"] \
-                        if item not in self._overlays[olid]["Banlist"]]
+                    peer_list = [peer_id for peer_id in self._net_ovls[olid]["KnownPeers"] \
+                        if not self._net_ovls[olid]["KnownPeers"][peer_id].is_excluded]
                     manual_topo = self._cm_config["Overlays"][olid].get("ManualTopology", False)
                     params = {"OverlayId": olid, "NodeId": self.node_id,
                               "Peers": peer_list,
@@ -128,12 +158,12 @@ class Topology(ControllerModule, CFX):
                                   "MaxLongDistEdges", 2),
                               "ManualTopology": manual_topo}
                     gb = GraphBuilder(params)
-                    adjl = gb.build_adj_list(nb.get_adj_list(), self._overlays[olid]["OndPeers"])
+                    adjl = gb.build_adj_list(nb.get_adj_list(), self._net_ovls[olid]["OndPeers"])
                     nb.refresh(adjl)
-                    self._overlays[olid]["NewPeerCount"] = 0
+                    self._net_ovls[olid]["NewPeerCount"] = 0
                 else:
                     self.register_cbt("Logger", "LOG_DEBUG", "{0} new peers discovered, delaying "
-                                      "refresh".format(self._overlays[olid]["NewPeerCount"]))
+                                      "refresh".format(self._net_ovls[olid]["NewPeerCount"]))
         cbt.set_response(None, True)
         self.complete_cbt(cbt)
 
@@ -142,7 +172,8 @@ class Topology(ControllerModule, CFX):
         try:
             with self._lock:
                 for olid in self._cm_config["Overlays"]:
-                    peer_ids[olid] = set(self._overlays[olid]["KnownPeers"])
+                    peer_ids[olid] = set(peer_id for peer_id in self._net_ovls[olid]["KnownPeers"]\
+                        if not self._net_ovls[olid]["KnownPeers"][peer_id].is_excluded)
                 cbt.set_response(data=peer_ids, status=True)
                 self.complete_cbt(cbt)
         except KeyError:
@@ -156,8 +187,8 @@ class Topology(ControllerModule, CFX):
         try:
             with self._lock:
                 edges = {}
-                for olid in self._overlays:
-                    nb = self._overlays[olid]["NetBuilder"]
+                for olid in self._net_ovls:
+                    nb = self._net_ovls[olid]["NetBuilder"]
                     if nb:
                         adjl = nb.get_adj_list()
                         for k in adjl.conn_edges:
@@ -182,13 +213,16 @@ class Topology(ControllerModule, CFX):
         olid = params["OverlayId"]
         peer_id = params["PeerId"]
         with self._lock:
-            self._overlays[olid]["NetBuilder"].update_edge_state(params)
+            self._net_ovls[olid]["NetBuilder"].update_edge_state(params)
+            if params["UpdateType"] == "DISCONNECTED":
+                self._net_ovls[olid]["KnownPeers"][peer_id].exclude()
+                self.top_log("Excluding peer {0} until {1}".
+                             format(peer_id,
+                                    self._net_ovls[olid]["KnownPeers"][peer_id].removal_time))
             if params["UpdateType"] == "REMOVED":
-                self.top_log("Removing peer id from peer list {0}".format(peer_id))
-                i = self._overlays[olid]["KnownPeers"].index(peer_id)
-                self._overlays[olid]["KnownPeers"].pop(i)
                 self._do_topo_change_post(olid)
             elif params["UpdateType"] == "CONNECTED":
+                self._net_ovls[olid]["KnownPeers"][peer_id].restore()
                 self._do_topo_change_post(olid)
             self._update_overlay(olid)
         cbt.set_response(None, True)
@@ -203,8 +237,9 @@ class Topology(ControllerModule, CFX):
         olid = cbt.request.params[0]
         peer = (cbt.request.params[1], cbt.request.params[2])
         with self._lock:
-            if olid in self._overlays and peer[0] in self._overlays[olid]["KnownPeers"]:
-                self._overlays[olid]["OndPeers"].append(peer)
+            if ((olid in self._net_ovls) and (peer[0] in self._net_ovls[olid]["KnownPeers"]) and
+                (not self._net_ovls[olid]["KnownPeers"][peer[0]].is_excluded)):
+                self._net_ovls[olid]["OndPeers"].append(peer)
             else:
                 self.register_cbt("Logger", "LOG_WARNING", "Invalid on demand tunnel request "
                                   "parameter, OverlayId={0}, PeerId={1}".format(olid, peer[0]))
@@ -219,15 +254,17 @@ class Topology(ControllerModule, CFX):
             edge_cbt.set_response("Unknown overlay id specified in edge request", False)
             self.complete_cbt(edge_cbt)
             return
-        #edge_resp = self._overlays[olid]["NetBuilder"].on_negotiate_edge_req(edge_req)
-        #edge_cbt.set_response(edge_resp.data, edge_resp.is_accepted)
-        #self.complete_cbt(edge_cbt)
-        edge_resp = self._overlays[olid]["NetBuilder"].negotiate_incoming_edge(edge_req)
+        if self.config["Overlays"][olid].get("Role", "Switch").casefold() == "leaf".casefold():
+            self.register_cbt("Logger", "LOG_INFO", "Rejected edge negotiation as config specifies"
+                              " leaf device")
+            edge_cbt.set_response("E5 - Not accepting incoming connections, leaf device", False)
+            self.complete_cbt(edge_cbt)
+            return
+        edge_resp = self._net_ovls[olid]["NetBuilder"].negotiate_incoming_edge(edge_req)
         if edge_resp.is_accepted:
             peer_id = edge_req.initiator_id
             edge_id = edge_req.edge_id
-            self._overlays[olid]["NegoConnEdges"][peer_id] = (edge_req, edge_resp)
-            #self.register_cbt("Logger", "LOG_DEBUG", "NegoConnEdges={0}".format(self._overlays[olid]["NegoConnEdges"]))
+            self._net_ovls[olid]["NegoConnEdges"][peer_id] = (edge_req, edge_resp)
             self._authorize_edge(olid, peer_id, edge_id, parent_cbt=edge_cbt)
         else:
             edge_cbt.set_response(edge_resp.data, False)
@@ -240,10 +277,10 @@ class Topology(ControllerModule, CFX):
         olid = cbt.request.params["OverlayId"]
         peer_id = cbt.request.params["PeerId"]
         if cbt.response.status:
-            _, edge_resp = self._overlays[olid]["NegoConnEdges"].pop(peer_id)
-            self._overlays[olid]["NetBuilder"].add_incoming_auth_conn_edge(peer_id)
+            _, edge_resp = self._net_ovls[olid]["NegoConnEdges"].pop(peer_id)
+            self._net_ovls[olid]["NetBuilder"].add_incoming_auth_conn_edge(peer_id)
         else:
-            self._overlays[olid]["NegoConnEdges"].pop(peer_id)
+            self._net_ovls[olid]["NegoConnEdges"].pop(peer_id)
             edge_resp = EdgeResponse("E4 - Tunnel service unavailable", False)
         nego_cbt = cbt.parent
         self.free_cbt(cbt)
@@ -264,7 +301,7 @@ class Topology(ControllerModule, CFX):
             edge_nego["is_accepted"] = rem_act.status
             edge_nego["data"] = rem_act.data
             edge_nego = EdgeNegotiate(**edge_nego)
-            self._overlays[olid]["NetBuilder"].complete_edge_negotiation(edge_nego)
+            self._net_ovls[olid]["NetBuilder"].complete_edge_negotiation(edge_nego)
             self.free_cbt(cbt)
         else:
             self.register_cbt("Logger", "LOG_WARNING", "Unrecognized remote action {0}"
@@ -307,37 +344,40 @@ class Topology(ControllerModule, CFX):
                     parent_cbt.set_response(cbt_data, cbt_status)
                     self.complete_cbt(parent_cbt)
 
-    def _cleanup_banlist(self):
-        # Remove peers from the duration based banlist. Higher successive connection failures
-        # results in potentially longer duration in the banlist.
-        tmp = []
-        for olid in self._overlays:
-            for peer_id in self._overlays[olid]["Banlist"]:
-                rt = self._overlays[olid]["Banlist"][peer_id]["RemovalTime"]
-                if rt >= time.time():
-                    tmp.append(peer_id)
-            for peer_id in tmp:
-                self._overlays[olid]["Banlist"].pop(peer_id, None)
-                self.register_cbt("Logger", "LOG_INFO",
-                                  "Node {0} removed from banlist".format(peer_id[:7]))
+    #def _cleanup_exclusion_list(self):
+    #    # Remove peers from the duration based exclusion_list. Higher successive connection failures
+    #    # results in potentially longer duration in the exclusion_list.
+    #    tmp = []
+    #    for olid in self._net_ovls:
+    #        for peer_id in self._net_ovls[olid]["Exclude"]:
+    #            rt = self._net_ovls[olid]["Exclude"][peer_id]["RemovalTime"]
+    #            if rt >= time.time():
+    #                tmp.append(peer_id)
+    #        for peer_id in tmp:
+    #            self._net_ovls[olid]["Exclude"].pop(peer_id, None)
+    #            self.register_cbt("Logger", "LOG_INFO",
+    #                              "Node {0} removed from exclusion_list".format(peer_id[:7]))
 
     def _update_overlay(self, olid):
-        nb = self._overlays[olid]["NetBuilder"]
+        nb = self._net_ovls[olid]["NetBuilder"]
         if nb.is_ready:
             self.register_cbt("Logger", "LOG_DEBUG", "Refreshing topology...")
             enf_lnks = self._cm_config["Overlays"][olid].get("EnforcedLinks", {})
             manual_topo = self._cm_config["Overlays"][olid].get("ManualTopology", False)
+            peer_list = [peer_id for peer_id in self._net_ovls[olid]["KnownPeers"] \
+                if not self._net_ovls[olid]["KnownPeers"][peer_id].is_excluded]
+
             params = {"OverlayId": olid, "NodeId": self.node_id,
-                      "Peers": self._overlays[olid]["KnownPeers"],
+                      "Peers": peer_list,
                       "EnforcedEdges": enf_lnks,
                       "MaxSuccessors": self._cm_config["Overlays"][olid].get("MaxSuccessors", 1),
                       "MaxLongDistEdges": self._cm_config["Overlays"][olid].get(
                           "MaxLongDistEdges", 2),
                       "ManualTopology": manual_topo}
             gb = GraphBuilder(params)
-            adjl = gb.build_adj_list(nb.get_adj_list(), self._overlays[olid]["OndPeers"])
+            adjl = gb.build_adj_list(nb.get_adj_list(), self._net_ovls[olid]["OndPeers"])
             nb.refresh(adjl)
-            self._overlays[olid]["NewPeerCount"] = 0
+            self._net_ovls[olid]["NewPeerCount"] = 0
         else:
             self.register_cbt("Logger", "LOG_DEBUG", "Net builder not yet ready, skipping...")
 
@@ -353,14 +393,14 @@ class Topology(ControllerModule, CFX):
     def manage_topology(self):
         # Periodically refresh the topology, making sure desired links exist and exipred ones are
         # removed.
-        self._cleanup_banlist()
-        for olid in self._overlays:
-            self.register_cbt("Logger", "LOG_INFO", "known_peers={}".format(self._overlays[olid]["KnownPeers"]))
+        #self._cleanup_exclusion_list()
+        for olid in self._net_ovls:
             self._update_overlay(olid)
 
     def timer_method(self):
         with self._lock:
             self.manage_topology()
+            self.register_cbt("Logger", "LOG_DEBUG", "Timer TOP State:\n" + str(self))
 
     def top_add_edge(self, overlay_id, peer_id, edge_id):
         """

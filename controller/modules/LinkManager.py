@@ -38,6 +38,11 @@ class Link():
                 (self.lnkid[:7], self._creation_state, self.status_retry, self.stats)
         return state
 
+    def __str__(self):
+        state = "Link<lnkid=%s, creation_state=0x%02x, status_retry=%s>" % \
+                (self.lnkid[:7], self._creation_state, self.status_retry)
+        return state
+
     @property
     def creation_state(self):
         return self._creation_state

@@ -26,29 +26,31 @@ except ImportError:
 import struct
 import uuid
 
-EdgeTypes = ["CETypeUnknown", "CETypeEnforced", "CETypeSuccessor", "CETypeLongDistance",
-             "CETypeOnDemand", "CETypeIEnforced", "CETypePredecessor", "CETypeILongDistance",
-             "CETypeIOnDemand"]
+EdgeTypes1 = ["CETypeUnknown", "CETypeEnforced", "CETypeSuccessor", "CETypeLongDistance",
+              "CETypeOnDemand"]
+EdgeTypes2 = ["CETypeUnknown", "CETypeIEnforced", "CETypePredecessor", "CETypeILongDistance",
+              "CETypeIOnDemand"]
 EdgeStates = ["CEStateUnknown", "CEStateCreated", "CEStateConnected", "CEStateDisconnected"]
 
 def transpose_edge_type(edge_type):
+    edge_type = EdgeTypes1[0]
     if edge_type == "CETypeEnforced":
-        return "CETypeIEnforced"
-    if edge_type == "CETypeSuccessor":
-        return "CETypePredecessor"
-    if edge_type == "CETypeLongDistance":
-        return "CETypeILongDistance"
-    if edge_type == "CETypeOnDemand":
-        return "CETypeIOnDemand"
-    if edge_type == "CETypeIEnforced":
-        return "CETypeEnforced"
-    if edge_type == "CETypePredecessor":
-        return "CETypeSuccessor"
-    if edge_type == "CETypeILongDistance":
-        return "CETypeLongDistance"
-    if edge_type == "CETypeIOnDemand":
-        return "CETypeOnDemand"
-    return "CETypeUnknown"
+        edge_type = EdgeTypes2[1]
+    elif edge_type == "CETypeSuccessor":
+        edge_type = EdgeTypes2[2]
+    elif edge_type == "CETypeLongDistance":
+        edge_type = EdgeTypes2[3]
+    elif edge_type == "CETypeOnDemand":
+        edge_type = EdgeTypes2[4]
+    elif edge_type == "CETypeIEnforced":
+        edge_type = EdgeTypes1[1]
+    elif edge_type == "CETypePredecessor":
+        edge_type = EdgeTypes1[2]
+    elif edge_type == "CETypeILongDistance":
+        edge_type = EdgeTypes1[3]
+    elif edge_type == "CETypeIOnDemand":
+        edge_type = EdgeTypes1[4]
+    return edge_type
 
 class ConnectionEdge():
     """ A discriptor of the edge/link between two peers."""
@@ -62,7 +64,7 @@ class ConnectionEdge():
         self.connected_time = None
         self.edge_state = "CEStateUnknown"
         self.edge_type = edge_type
-        self.edge_role = [edge_type]
+        #self.edge_role = [edge_type]
         self.marked_for_delete = False
 
     def __key__(self):
@@ -150,6 +152,7 @@ class ConnEdgeAdjacenctList():
         self.overlay_id = overlay_id
         self.node_id = node_id
         self.conn_edges = {}
+        self._successor_nid = None
         self.max_successors = 1
         self.max_ldl = 4
         self.max_ondemand = 5
@@ -162,8 +165,9 @@ class ConnEdgeAdjacenctList():
         return len(self.conn_edges)
 
     def __repr__(self):
-        msg = "ConnEdgeAdjacenctList<overlay_id = %s, node_id = %s, conn_edges = %s>" \
-               %(self.overlay_id, self.node_id, self.conn_edges)
+        msg = "ConnEdgeAdjacenctList<overlay_id = %s, node_id = %s, successor_nid=%s, "\
+              "conn_edges = %s>" % (self.overlay_id, self.node_id, self._successor_nid,
+                                    self.conn_edges)
         return msg
 
     def __bool__(self):
@@ -175,26 +179,46 @@ class ConnEdgeAdjacenctList():
         return False
 
     def __setitem__(self, peer_id, ce):
-        self.conn_edges[peer_id] = ce
-
+        #self.conn_edges[peer_id] = ce
+        self.add_connection_edge(ce
+                                 )
     def __getitem__(self, peer_id):
         return self.conn_edges[peer_id]
 
     def __delitem__(self, peer_id):
-        del self.conn_edges[peer_id]
+        #del self.conn_edges[peer_id]
+        self.remove_connection_edge(peer_id)
 
     def __iter__(self):
         return self.conn_edges.__iter__()
 
     @property
-    def threshold(self):
-        return 2 * (self.max_ldl + self.max_successors + self.max_ondemand)
+    def successor_ce(self):
+        return self.conn_edges.get(self._successor_nid)
+
+    @property
+    def edge_threshold(self):
+        """ Define the maximum number of links per node """
+        return 2 * (self.max_ldl + self.max_successors) + self.max_ondemand
 
     def add_connection_edge(self, ce):
         self.conn_edges[ce.peer_id] = ce
+        if not self._successor_nid:
+            self._successor_nid = ce.peer_id
+        elif ce.peer_id > self.node_id and ce.peer_id < self._successor_nid:
+            self._successor_nid = ce.peer_id
 
     def remove_connection_edge(self, peer_id):
-        self.conn_edges.pop(peer_id, None)
+        ce = self.conn_edges.pop(peer_id, None)
+        if not self.conn_edges:
+            self._successor_nid = None
+        elif ce and ce.peer_id == self._successor_nid:
+            nl = [*self.conn_edges.keys()]
+            nl.append(self.node_id)
+            nl = sorted(nl)
+            idx = nl.index(self.node_id)
+            succ_i = (idx+1) % len(nl)
+            self._successor_nid = nl[succ_i]
 
     def get_edges(self, edge_type):
         conn_edges = {}
@@ -217,16 +241,6 @@ class ConnEdgeAdjacenctList():
                     self.conn_edges[peer_id].edge_state == edge_state):
                 conn_edges[peer_id] = self.conn_edges[peer_id]
         return conn_edges
-
-    def validate(self):
-        edge_count = self.edge_type_count("CETypeSuccessor")
-        if edge_count > self.max_successors:
-            raise ValueError("Too many Successor edges in adj list, current:{0}, max:{1}".
-                             format(edge_count, self.max_successors))
-        edge_count = self.edge_type_count("CETypeLongDistance")
-        if self.edge_type_count("CETypeLongDistance") > self.max_ldl:
-            raise ValueError("Too many Long Distance edges in adj list, current:{0}, max:{1}".
-                             format(edge_count, self.max_ldl))
 
 class NetworkGraph():
     """Describes the structure of the Topology as a dict of node IDs to ConnEdgeAdjacenctList"""
