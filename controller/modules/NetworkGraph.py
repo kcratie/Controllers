@@ -30,7 +30,8 @@ EdgeTypes1 = ["CETypeUnknown", "CETypeEnforced", "CETypeSuccessor", "CETypeLongD
               "CETypeOnDemand"]
 EdgeTypes2 = ["CETypeUnknown", "CETypeIEnforced", "CETypePredecessor", "CETypeILongDistance",
               "CETypeIOnDemand"]
-EdgeStates = ["CEStateUnknown", "CEStateCreated", "CEStateConnected", "CEStateDisconnected"]
+EdgeStates = ["CEStateUnknown", "CEStateCreated", "CEStateConnected", "CEStateDisconnected",
+              "CEStateDeleting"]
 
 def transpose_edge_type(edge_type):
     edge_type = EdgeTypes1[0]
@@ -148,18 +149,16 @@ class ConnectionEdge():
 
 class ConnEdgeAdjacenctList():
     """ A series of ConnectionEdges that are incident on the local node"""
-    def __init__(self, overlay_id=None, node_id=None, cfg=None):
+    #def __init__(self, overlay_id, node_id, cfg):
+    def __init__(self, overlay_id, node_id, max_succ=0, max_ldl=0, max_ond=0):
         self.overlay_id = overlay_id
         self.node_id = node_id
         self.conn_edges = {}
         self._successor_nid = None
-        self.max_successors = 1
-        self.max_ldl = 4
-        self.max_ondemand = 5
-        if cfg:
-            self.max_successors = int(cfg["MaxSuccessors"])
-            self.max_ldl = int(cfg["MaxLongDistEdges"])
-            self.max_ondemand = int(cfg["MaxLongDistEdges"])
+        self.degree_threshold = (2 * (max_succ + max_ldl)) + max_ond
+        self.max_successors = max_succ
+        self.max_ldl = max_ldl
+        self.max_ondemand = max_ond
 
     def __len__(self):
         return len(self.conn_edges)
@@ -180,8 +179,8 @@ class ConnEdgeAdjacenctList():
 
     def __setitem__(self, peer_id, ce):
         #self.conn_edges[peer_id] = ce
-        self.add_connection_edge(ce
-                                 )
+        self.add_connection_edge(ce)
+
     def __getitem__(self, peer_id):
         return self.conn_edges[peer_id]
 
@@ -195,11 +194,6 @@ class ConnEdgeAdjacenctList():
     @property
     def successor_ce(self):
         return self.conn_edges.get(self._successor_nid)
-
-    @property
-    def edge_threshold(self):
-        """ Define the maximum number of links per node """
-        return 2 * (self.max_ldl + self.max_successors) + self.max_ondemand
 
     def add_connection_edge(self, ce):
         self.conn_edges[ce.peer_id] = ce
@@ -241,55 +235,3 @@ class ConnEdgeAdjacenctList():
                     self.conn_edges[peer_id].edge_state == edge_state):
                 conn_edges[peer_id] = self.conn_edges[peer_id]
         return conn_edges
-
-class NetworkGraph():
-    """Describes the structure of the Topology as a dict of node IDs to ConnEdgeAdjacenctList"""
-    def __init__(self, graph=None):
-        self._graph = graph
-        if self._graph is None:
-            self._graph = {}
-
-    def vertices(self):
-        """ returns the vertices of a graph """
-        return list(self._graph.keys())
-
-    def edges(self):
-        """ returns the edges of a graph """
-        return self._generate_edges()
-
-    def find_isolated_nodes(self):
-        """ returns a list of isolated nodes. """
-        isolated = []
-        for node in self._graph:
-            if not self._graph[node]:
-                isolated += node
-        return isolated
-
-    def add_adj_list(self, adj_list):
-        self._graph[adj_list.node_id] = adj_list
-
-    def add_vertex(self, vertex):
-        """ Adds vertex "vertex" as a key with an empty ConnEdgeAdjacenctList to self._graph. """
-        if vertex not in self._graph:
-            self._graph[vertex] = ConnEdgeAdjacenctList()
-
-    def _generate_edges(self):
-        """
-        Generating the edges of the graph "graph". Edges are represented as sets
-        with one (a loop back to the vertex) or two vertices
-        """
-        edges = set()
-        for vertex in self._graph:
-            for neighbour in self._graph[vertex].get_edges():
-                edge = (vertex, neighbour)
-                edges.add(edge)
-        return sorted(edges)
-
-    def __str__(self):
-        res = "vertices: "
-        for k in self._graph:
-            res += str(k) + " "
-        res += "\nedges:\n"
-        for edge in self._generate_edges():
-            res += str(edge) + "\n"
-        return res

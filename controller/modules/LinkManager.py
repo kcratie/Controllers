@@ -23,7 +23,6 @@ import os
 import threading
 import time
 from controller.framework.ControllerModule import ControllerModule
-from controller.framework.ipoplib import RemoteAction
 
 
 class Link():
@@ -100,7 +99,7 @@ class LinkManager(ControllerModule):
         self._ignored_net_interfaces = dict()
 
     def __repr__(self):
-        state = "LinkManager<_peers: %s, _tunnels: %s>" % (self._peers, self._tunnels)
+        state = "LinkManager<_peers=%s, _tunnels=%s>" % (self._peers, str(self._tunnels))
         return state
 
     def initialize(self):
@@ -218,7 +217,7 @@ class LinkManager(ControllerModule):
         self._tunnels[tnlid].mac = tnl_desc["MAC"]
         self._tunnels[tnlid].tap_name = tnl_desc["TapName"]
         self._tunnels[tnlid].fpr = tnl_desc["FPR"]
-        self.register_cbt("Logger", "LOG_DEBUG", "_tunnels:{}".format(self._tunnels))
+        self.register_cbt("Logger", "LOG_DEBUG", "Updated tunnels:{}".format(self._tunnels[tnlid]))
 
     def _query_link_stats(self):
         """Query the status of links that have completed creation process"""
@@ -420,25 +419,20 @@ class LinkManager(ControllerModule):
                 "UID": self.node_id}}
         endp_param.update(params)
 
-        rem_act = RemoteAction(overlay_id, recipient_id=parent_cbt.request.params["PeerId"],
-                               recipient_cm="LinkManager",
-                               action="LNK_REQ_LINK_ENDPT",
-                               params=endp_param, parent_cbt=parent_cbt)
-        rem_act.submit_remote_act(self)
-        #remote_act = dict(OverlayId=overlay_id,
-        #                  RecipientId=parent_cbt.request.params["PeerId"],
-        #                  RecipientCM="LinkManager",
-        #                  Action="LNK_REQ_LINK_ENDPT",
-        #                  Params=endp_param)
-        #if parent_cbt is not None:
-        #    endp_cbt = self.create_linked_cbt(parent_cbt)
-        #    endp_cbt.set_request(self.module_name, "Signal",
-        #                         "SIG_REMOTE_ACTION", remote_act)
-        #else:
-        #    endp_cbt = self.create_cbt(self.module_name, "Signal",
-        #                               "SIG_REMOTE_ACTION", remote_act)
-        ## Send the message via SIG server to peer
-        #self.submit_cbt(endp_cbt)
+        remote_act = dict(OverlayId=overlay_id,
+                          RecipientId=parent_cbt.request.params["PeerId"],
+                          RecipientCM="LinkManager",
+                          Action="LNK_REQ_LINK_ENDPT",
+                          Params=endp_param)
+        if parent_cbt is not None:
+            endp_cbt = self.create_linked_cbt(parent_cbt)
+            endp_cbt.set_request(self.module_name, "Signal",
+                                 "SIG_REMOTE_ACTION", remote_act)
+        else:
+            endp_cbt = self.create_cbt(self.module_name, "Signal",
+                                       "SIG_REMOTE_ACTION", remote_act)
+        # Send the message via SIG server to peer
+        self.submit_cbt(endp_cbt)
 
 
     def _rollback_link_creation_changes(self, tnlid):
@@ -467,9 +461,9 @@ class LinkManager(ControllerModule):
         tnlid = cbt.request.params["TunnelId"]
         self._peers[olid][peer_id] = tnlid
         self._tunnels[tnlid] = Tunnel(tnlid, olid, peer_id)
-        self.register_cbt("Logger", "LOG_DEBUG", "Tunnel={0} auth for Peer={1} completed"
-                          .format(tnlid, peer_id))
-        cbt.set_response("Tunnel={0} auth completed".format(tnlid), True)
+        self.register_cbt("Logger", "LOG_DEBUG", "TunnelId:{0} auth for Peer:{1} completed"
+                          .format(tnlid[:7], peer_id[:7]))
+        cbt.set_response("Auth completed, TunnelId:{0}".format(tnlid[:7]), True)
         self.complete_cbt(cbt)
 
     def req_handler_create_tunnel(self, cbt):
@@ -720,9 +714,9 @@ class LinkManager(ControllerModule):
         Send the Createlink control to local Tincan
         """
         # Create Link: Phase 5 Node A
-        lnkid = rem_act.data["LinkId"]
+        lnkid = rem_act["Data"]["LinkId"]
         tnlid = self.tunnel_id(lnkid)
-        peer_id = rem_act.recipient_id
+        peer_id = rem_act["RecipientId"]
         if tnlid not in self._tunnels:
             # abort the handshake as the process timed out
             parent_cbt.set_response("Tunnel creation timeout failure", False)
@@ -731,8 +725,8 @@ class LinkManager(ControllerModule):
         self._tunnels[tnlid].link.creation_state = 0xA3
         self.register_cbt("Logger", "LOG_DEBUG", "Create Link:{} Phase 3/5 Node A - Peer: {}"
                           .format(lnkid[:7], peer_id[:7]))
-        node_data = rem_act.data["NodeData"]
-        olid = rem_act.overlay_id
+        node_data = rem_act["Data"]["NodeData"]
+        olid = rem_act["OverlayId"]
         # add the peer MAC to the tunnel descr
         self._tunnels[tnlid].peer_mac = node_data["MAC"]
         cbt_params = {"OverlayId": olid, "TunnelId": tnlid, "LinkId": lnkid, "Type": "TUNNEL",
@@ -859,14 +853,11 @@ class LinkManager(ControllerModule):
             parent_cbt.set_response(resp_data, False)
             self.complete_cbt(parent_cbt)
         else:
-            #rem_act = cbt.response.data
-            rem_act = RemoteAction.from_cbt(cbt)
+            rem_act = cbt.response.data
             self.free_cbt(cbt)
-            #if rem_act["Action"] == "LNK_REQ_LINK_ENDPT":
-            if rem_act.action == "LNK_REQ_LINK_ENDPT":
+            if rem_act["Action"] == "LNK_REQ_LINK_ENDPT":
                 self._create_link_endpoint(rem_act, parent_cbt)
-            #elif rem_act["Action"] == "LNK_ADD_PEER_CAS":
-            elif rem_act.action == "LNK_ADD_PEER_CAS":
+            elif rem_act["Action"] == "LNK_ADD_PEER_CAS":
                 self._complete_create_link_request(parent_cbt)
 
     def req_handler_tincan_msg(self, cbt):
@@ -997,7 +988,7 @@ class LinkManager(ControllerModule):
         with self._lock:
             self._cleanup_expired_incomplete_links()
             self._query_link_stats()
-            self.register_cbt("Logger", "LOG_DEBUG", "Timer LNK State:\n" + str(self))
+            self.register_cbt("Logger", "LOG_DEBUG", "Timer LNK State=" + str(self))
 
     def terminate(self):
         pass

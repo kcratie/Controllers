@@ -55,7 +55,7 @@ class netNode():
         self.datapath = datapath
         self.addr = (datapath.address[0], netNode.SDNI_PORT)
         self.node_id = None
-        self.topo = ConnEdgeAdjacenctList()
+        self.topo = None
         self._leaf_prts = None
         self.switch = None
         self.links = {} # maps port no to tuple (local_mac, peer_mac, peer_id)
@@ -158,7 +158,7 @@ class netNode():
         prt = switches.Port(self.datapath.id, self.datapath.ofproto, ofpport)
         self.switch.ports.remove(prt)
         td = self.links.get(port_no)
-        if td:
+        if td and self.topo:
             self.topo.remove_connection_edge(td[2])
             self.mac_local_to_peer.pop(td[0], None)
         self.links.pop(port_no, None)
@@ -540,7 +540,7 @@ class RingRoute(app_manager.RyuApp):
         if not resp:
             self.logger.info("Failed to delete flow on outgress %s", port_no)
         match = parser.OFPMatch(in_port=port_no)
-        mod = parser.OFPFlowMod(datapath=datapath, table_id=ofproto.OFPTT_ALL, 
+        mod = parser.OFPFlowMod(datapath=datapath, table_id=ofproto.OFPTT_ALL,
                                 flags=ofproto.OFPFF_SEND_FLOW_REM,
                                 match=match, command=cmd)
         resp = datapath.send_msg(mod)
@@ -555,7 +555,7 @@ class RingRoute(app_manager.RyuApp):
         inst = [datapath.ofproto_parser.OFPInstructionActions(
             datapath.ofproto.OFPIT_APPLY_ACTIONS, acts)]
         mt = datapath.ofproto_parser.OFPMatch(eth_dst=dst_mac)
-        mod = datapath.ofproto_parser.OFPFlowMod(datapath=datapath, 
+        mod = datapath.ofproto_parser.OFPFlowMod(datapath=datapath,
                                                  table_id=datapath.ofproto.OFPTT_ALL,
                                                  match=mt, command=cmd, instructions=inst)
         datapath.send_msg(mod)
@@ -564,7 +564,7 @@ class RingRoute(app_manager.RyuApp):
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
         cmd = ofproto.OFPFC_DELETE
-        match = parser.OFPMatch(in_port=in_port, eth_dst=("33:33:00:00:00:00","ff:ff:00:00:00:00"))
+        match = parser.OFPMatch(in_port=in_port, eth_dst=("33:33:00:00:00:00", "ff:ff:00:00:00:00"))
         mod = parser.OFPFlowMod(datapath=datapath, cookie=0, cookie_mask=0,
                                 table_id=ofproto.OFPTT_ALL, flags=ofproto.OFPFF_SEND_FLOW_REM,
                                 match=match, command=cmd)
@@ -584,14 +584,14 @@ class RingRoute(app_manager.RyuApp):
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
 
-        match = parser.OFPMatch(eth_dst=("33:33:00:00:00:00","ff:ff:00:00:00:00"))
+        match = parser.OFPMatch(eth_dst=("33:33:00:00:00:00", "ff:ff:00:00:00:00"))
         # match = parser.OFPMatch(in_port=in_port, eth_dst=("33:33:00:00:00:00","ff:ff:00:00:00:00"))
         inst = [parser.OFPInstructionActions(ofproto.OFPIT_CLEAR_ACTIONS, [])]
 
         mod = parser.OFPFlowMod(datapath=datapath, priority=priority, match=match,
                                 command=ofproto.OFPFC_ADD, instructions=inst)
         resp = datapath.send_msg(mod)
-        match = parser.OFPMatch(eth_dst=("01:00:5e:00:00:00","ff:ff:ff:ff:ff:00"))
+        match = parser.OFPMatch(eth_dst=("01:00:5e:00:00:00", "ff:ff:ff:ff:ff:00"))
         mod = parser.OFPFlowMod(datapath=datapath, priority=priority, match=match,
                                 command=ofproto.OFPFC_ADD, instructions=inst)
         resp = datapath.send_msg(mod)

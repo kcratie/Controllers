@@ -325,31 +325,30 @@ class RemoteAction():
             yield("Data", self.data)
 
     def submit_remote_act(self, cm):
+        self.initiator_id = cm.node_id
+        self.initiator_cm = cm.module_name
         ra_desc = dict(self)
         if self._parent_cbt is not None:
-            endp_cbt = cm.create_linked_cbt(self._parent_cbt)
-            endp_cbt.set_request(cm.module_name, "Signal", "SIG_REMOTE_ACTION", ra_desc)
+            cbt = cm.create_linked_cbt(self._parent_cbt)
+            cbt.set_request(cm.module_name, "Signal", "SIG_REMOTE_ACTION", ra_desc)
         else:
-            endp_cbt = cm.create_cbt(cm.module_name, "Signal", "SIG_REMOTE_ACTION", ra_desc)
-        cm.submit_cbt(endp_cbt)
+            cbt = cm.create_cbt(cm.module_name, "Signal", "SIG_REMOTE_ACTION", ra_desc)
+        self.action_tag = cbt.tag
+        cm.submit_cbt(cbt)
 
     @classmethod
     def from_cbt(cls, cbt):
-        rem_act = None
-        if cbt.op_type == "Request":
-            reqp = cbt.request.params
-            rem_act = cls(reqp["OverlayId"], reqp["RecipientId"], reqp["RecipientCM"],
-                          reqp["Action"], reqp["Params"], frm_cbt=cbt)
-            rem_act.initiator_cm = cbt.request.initiator
-            rem_act.action_tag = cbt.tag
-        elif cbt.op_type == "Response":
-            resp_data = cbt.response.data
-            rem_act = cls(resp_data["OverlayId"], resp_data["RecipientId"],
-                          resp_data["RecipientCM"], resp_data["Action"], resp_data["Params"],
-                          frm_cbt=cbt, status=resp_data["Status"], data=resp_data["Data"])
-            rem_act.initiator_cm = resp_data["InitiatorCM"]
-            rem_act.initiator_id = resp_data["InitiatorId"]
-            rem_act.action_tag = cbt.tag
+        reqp = cbt.request.params
+        rem_act = cls(reqp["OverlayId"], reqp["RecipientId"], reqp["RecipientCM"],
+                      reqp["Action"], reqp["Params"], frm_cbt=cbt)
+        rem_act.initiator_id = reqp["InitiatorId"]
+        rem_act.initiator_cm = reqp["InitiatorCM"]
+        rem_act.action_tag = cbt.tag
+        if cbt.op_type == "Response":
+            rem_act.status = cbt.response.status
+            rem_act.data = cbt.response.data
+            if isinstance(rem_act.data, dict):
+                rem_act.data = rem_act.data["Data"]
         return rem_act
 
     def tx_remote_act(self, sig):
@@ -357,6 +356,5 @@ class RemoteAction():
             self.cbt.set_response("Overlay ID not found", False)
             sig.complete_cbt(self.cbt)
             return
-        self.initiator_id = sig.node_id
         rem_act = dict(self)
         sig.transmit_remote_act(rem_act, self.recipient_id, "invk")

@@ -39,8 +39,8 @@ class GraphBuilder():
         self._manual_topo = cfg.get("ManualTopology", False)
         self._max_successors = int(cfg["MaxSuccessors"])
         # the number of symphony edges that shoulb be maintained
-        num_peers = len(self._peers)
-        self._max_ldl_cnt = math.floor(math.log(num_peers, 2)) # int(cfg["MaxLongDistEdges"])
+        self._max_ldl_cnt = int(cfg["MaxLongDistEdges"])
+        self._max_ond = int(cfg["MaxOnDemandEdges"])
         # Currently active adjacency list, needed to minimize changes in chord selection
         self._curr_adj_lst = current_adj_list
 
@@ -120,38 +120,42 @@ class GraphBuilder():
                 ce = ConnectionEdge(peer_id, edge_type="CETypeLongDistance")
                 adj_list.add_connection_edge(ce)
 
-    def _build_ondemand_links(self, adj_list, request_list, transition_adj_list):
+    def _build_ondemand_links(self, adj_list, transition_adj_list, request_list):
         tmp = []
-        for peer_id, op in request_list:
+        for task in request_list:
+            peer_id = task["PeerId"]
+            op = task["Operation"]
             if op == "ADD":
                 if peer_id in self._peers and (peer_id not in adj_list or
                                                peer_id not in transition_adj_list):
-                    ce = ConnectionEdge(peer_id, None, "CETypeOnDemand")
+                    ce = ConnectionEdge(peer_id, edge_type="CETypeOnDemand")
                     adj_list.add_connection_edge(ce)
-                    tmp.append(peer_id)
             elif op == "REMOVE":
-                if peer_id in adj_list and adj_list[peer_id].edge_type == "CETypeOnDemand":
-                    adj_list.pop(peer_id)
+                if peer_id in transition_adj_list and \
+                    transition_adj_list[peer_id].edge_type == "CETypeOnDemand":
+                    transition_adj_list.pop(peer_id)
+            tmp.append(peer_id)
+
         for peer_id in tmp:
             request_list.pop(peer_id)
 
     def build_adj_list(self, transition_adj_list, request_list=None):
         adj_list = ConnEdgeAdjacenctList(self.overlay_id, self._node_id,
-                                         dict(MaxSuccessors=self._max_successors,
-                                              MaxLongDistEdges=self._max_ldl_cnt))
+                                         self._max_successors, self._max_ldl_cnt, self._max_ond)
         self._build_enforced(adj_list)
         if not self._manual_topo:
             self._build_successors(adj_list)
             self._build_long_dist_links(adj_list, transition_adj_list)
-            #if request_list:
-            #    self._build_ondemand_links(adj_list, request_list, transition_adj_list)
+            if request_list:
+                self._build_ondemand_links(adj_list, transition_adj_list, request_list)
         return adj_list
 
     def build_adj_list_ata(self,):
         """
         Generates a new adjacency list from the list of available peers
         """
-        adj_list = ConnEdgeAdjacenctList(self.overlay_id, self._node_id)
+        adj_list = ConnEdgeAdjacenctList(self.overlay_id, self._node_id,
+                                         self._max_successors, self._max_ldl_cnt, self._max_ond)
         for peer_id in self._peers:
             if self._enforced and peer_id in self._enforced:
                 ce = ConnectionEdge(peer_id)

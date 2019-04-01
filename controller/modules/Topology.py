@@ -18,6 +18,7 @@
 # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 # THE SOFTWARE.
+import math
 import random
 import threading
 import time
@@ -76,11 +77,8 @@ class Topology(ControllerModule, CFX):
         self._cfx_handle.start_subscription("LinkManager", "LNK_TUNNEL_EVENTS")
         nid = self.node_id
         for olid in self._cfx_handle.query_param("Overlays"):
-            MaxSuccessors = int(self.config["Overlays"][olid].get("MaxSuccessors", 1))
-            MaxLongDistEdges = int(self.config["Overlays"][olid].get("MaxLongDistEdges", 2))
-            thres = self.config["Overlays"][olid].get(
-                "MaxConcurrentEdgeSetup", int(MaxSuccessors + MaxLongDistEdges))
-            self._net_ovls[olid] = dict(NetBuilder=NetworkBuilder(self, olid, nid, thres),
+            max_wrk_ld = int(self.config["Overlays"][olid].get("MaxConcurrentEdgeSetup", 3))
+            self._net_ovls[olid] = dict(NetBuilder=NetworkBuilder(self, olid, nid, max_wrk_ld),
                                         KnownPeers={}, NewPeerCount=0, NegoConnEdges=dict(),
                                         OndPeers=[])
         try:
@@ -140,33 +138,16 @@ class Topology(ControllerModule, CFX):
         with self._lock:
             disc = self._net_ovls[olid]["KnownPeers"].get(peer_id)
             if not disc:
-                disc = DiscoveredPeer(peer_id, False, 0, time.time())
+                disc = DiscoveredPeer(peer_id)
                 self._net_ovls[olid]["KnownPeers"][peer_id] = disc
                 new_disc = True
             if new_disc or disc.is_excluded:
                 self._net_ovls[olid]["NewPeerCount"] += 1
-                nb = self._net_ovls[olid]["NetBuilder"]
-                if (nb.is_ready and self._net_ovls[olid]["NewPeerCount"]
-                        >= self._cm_config["PeerDiscoveryCoalesce"]):
+                if self._net_ovls[olid]["NewPeerCount"] >= self.config["PeerDiscoveryCoalesce"]:
                     self.register_cbt("Logger", "LOG_DEBUG", "Coalesced {0} new peer discovery, "
                                       "initiating network refresh"
                                       .format(self._net_ovls[olid]["NewPeerCount"]))
-                    enf_lnks = self._cm_config["Overlays"][olid].get("EnforcedLinks", {})
-                    peer_list = [peer_id for peer_id in self._net_ovls[olid]["KnownPeers"] \
-                        if not self._net_ovls[olid]["KnownPeers"][peer_id].is_excluded]
-                    manual_topo = self._cm_config["Overlays"][olid].get("ManualTopology", False)
-                    params = {"OverlayId": olid, "NodeId": self.node_id,
-                              "Peers": peer_list,
-                              "EnforcedEdges": enf_lnks,
-                              "MaxSuccessors": self._cm_config["Overlays"][olid].get(
-                                  "MaxSuccessors", 1),
-                              "MaxLongDistEdges": self._cm_config["Overlays"][olid].get(
-                                  "MaxLongDistEdges", 2),
-                              "ManualTopology": manual_topo}
-                    gb = GraphBuilder(params)
-                    adjl = gb.build_adj_list(nb.get_adj_list(), self._net_ovls[olid]["OndPeers"])
-                    nb.refresh(adjl)
-                    self._net_ovls[olid]["NewPeerCount"] = 0
+                    self._update_overlay(olid)
                 else:
                     self.register_cbt("Logger", "LOG_DEBUG", "{0} new peers discovered, delaying "
                                       "refresh".format(self._net_ovls[olid]["NewPeerCount"]))
@@ -177,7 +158,7 @@ class Topology(ControllerModule, CFX):
         peer_ids = {}
         try:
             with self._lock:
-                for olid in self._cm_config["Overlays"]:
+                for olid in self.config["Overlays"]:
                     peer_ids[olid] = set(peer_id for peer_id in self._net_ovls[olid]["KnownPeers"]\
                         if not self._net_ovls[olid]["KnownPeers"][peer_id].is_excluded)
                 cbt.set_response(data=peer_ids, status=True)
@@ -239,16 +220,20 @@ class Topology(ControllerModule, CFX):
         self.complete_cbt(cbt)
 
     def req_handler_req_ond_tunnel(self, cbt):
-        """ params[0] - overlay_id, [1] - peer_id, [2] - ADD/REMOVE op string """
-        olid = cbt.request.params[0]
-        peer = (cbt.request.params[1], cbt.request.params[2])
+        """
+        Add the request params for creating an on demand tunnel
+        overlay_id, peer_id, ADD/REMOVE op string
+        """
+        olid = cbt.request.params["OverlayId"]
+        peer_id = cbt.request.params["PeerId"]
+        op = cbt.request.params
         with self._lock:
-            if (olid in self._net_ovls and peer[0] in self._net_ovls[olid]["KnownPeers"] and
-                    not self._net_ovls[olid]["KnownPeers"][peer[0]].is_excluded):
-                self._net_ovls[olid]["OndPeers"].append(peer)
+            if (olid in self._net_ovls and peer_id in self._net_ovls[olid]["KnownPeers"] and
+                    not self._net_ovls[olid]["KnownPeers"][peer_id].is_excluded):
+                self._net_ovls[olid]["OndPeers"].append(op)
             else:
                 self.register_cbt("Logger", "LOG_WARNING", "Invalid on demand tunnel request "
-                                  "parameter, OverlayId={0}, PeerId={1}".format(olid, peer[0]))
+                                  "parameter, OverlayId={0}, PeerId={1}".format(olid, peer_id))
 
     def req_handler_negotiate_edge(self, edge_cbt):
         """ Role B, decide if the request for an incoming edge is accepted or rejected """
@@ -313,7 +298,6 @@ class Topology(ControllerModule, CFX):
             self.register_cbt("Logger", "LOG_WARNING", "Unrecognized remote action {0}"
                               .format(rem_act.action))
 
-
     def process_cbt(self, cbt):
         if cbt.op_type == "Request":
             if cbt.request.action == "SIG_PEER_PRESENCE_NOTIFY":
@@ -351,25 +335,29 @@ class Topology(ControllerModule, CFX):
                     self.complete_cbt(parent_cbt)
 
     def _update_overlay(self, olid):
-        nb = self._net_ovls[olid]["NetBuilder"]
+        net_ovl = self._net_ovls[olid]
+        nb = net_ovl["NetBuilder"]
         if nb.is_ready:
-            self.register_cbt("Logger", "LOG_DEBUG", "Refreshing topology...")
-            enf_lnks = self._cm_config["Overlays"][olid].get("EnforcedLinks", {})
-            manual_topo = self._cm_config["Overlays"][olid].get("ManualTopology", False)
-            peer_list = [peer_id for peer_id in self._net_ovls[olid]["KnownPeers"] \
-                if not self._net_ovls[olid]["KnownPeers"][peer_id].is_excluded]
+            ovl_cfg = self.config["Overlays"][olid]
+            self.register_cbt("Logger", "LOG_DEBUG", "Initiating topology refresh ...")
+            enf_lnks = ovl_cfg.get("EnforcedLinks", {})
+            manual_topo = ovl_cfg.get("ManualTopology", False)
+            peer_list = [peer_id for peer_id in net_ovl["KnownPeers"] \
+                if not net_ovl["KnownPeers"][peer_id].is_excluded]
 
-            params = {"OverlayId": olid, "NodeId": self.node_id,
-                      "Peers": peer_list,
-                      "EnforcedEdges": enf_lnks,
-                      "MaxSuccessors": self._cm_config["Overlays"][olid].get("MaxSuccessors", 1),
-                      "MaxLongDistEdges": self._cm_config["Overlays"][olid].get(
-                          "MaxLongDistEdges", 2),
+            max_succ = int(ovl_cfg.get("MaxSuccessors", 1))
+            max_ond = int(ovl_cfg.get("MaxOnDemandEdges", 2))
+            max_ldl = int(ovl_cfg.get("MaxLongDistEdges", math.floor(math.log(len(peer_list), 2))))
+            if max_ldl < 4:
+                max_ldl = 4
+            params = {"OverlayId": olid, "NodeId": self.node_id, "Peers": peer_list,
+                      "EnforcedEdges": enf_lnks, "MaxSuccessors": max_succ,
+                      "MaxLongDistEdges": max_ldl, "MaxOnDemandEdges": max_ond,
                       "ManualTopology": manual_topo}
             gb = GraphBuilder(params)
-            adjl = gb.build_adj_list(nb.get_adj_list(), self._net_ovls[olid]["OndPeers"])
+            adjl = gb.build_adj_list(nb.get_adj_list(), net_ovl["OndPeers"])
             nb.refresh(adjl)
-            self._net_ovls[olid]["NewPeerCount"] = 0
+            net_ovl["NewPeerCount"] = 0
         else:
             self.register_cbt("Logger", "LOG_DEBUG", "Net builder not yet ready, skipping...")
 
@@ -391,7 +379,7 @@ class Topology(ControllerModule, CFX):
     def timer_method(self):
         with self._lock:
             self.manage_topology()
-            self.register_cbt("Logger", "LOG_DEBUG", "Timer TOP State:\n" + str(self))
+            self.register_cbt("Logger", "LOG_DEBUG", "Timer TOP State=" + str(self))
 
     def top_add_edge(self, overlay_id, peer_id, edge_id):
         """
@@ -418,3 +406,13 @@ class Topology(ControllerModule, CFX):
                                recipient_cm="Topology", action="TOP_NEGOTIATE_EDGE",
                                params=edge_params)
         rem_act.submit_remote_act(self)
+
+        #remote_act = dict(OverlayId=overlay_id,
+        #                  RecipientId=parent_cbt.request.params["PeerId"],
+        #                  RecipientCM="Topology",
+        #                  Action="TOP_NEGOTIATE_EDGE",
+        #                  Params=edge_params)
+
+        #edge_cbt = self.create_cbt(self.module_name, "Signal", "SIG_REMOTE_ACTION", remote_act)
+        ## Send the message via SIG server to peer
+        #self.submit_cbt(edge_cbt)

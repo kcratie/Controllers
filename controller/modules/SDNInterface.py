@@ -45,9 +45,7 @@ class SDNIRequestHandler(socketserver.BaseRequestHandler):
         elif task["Request"]["Action"] == "TunnelRquest":
             task["Response"] = dict(Status=True,
                                     Data="Request shall be considered")
-            self.server.sdni.sdn_tunnel_request((task["Request"]["OverlayId"],
-                                                 task["Request"]["PeerId"],
-                                                 task["Request"]["Operation"])) # op is ADD/REMOVE
+            self.server.sdni.sdn_tunnel_request(task["Request"]) # op is ADD/REMOVE
         else:
             self.server.sdni.sdn_log("An unrecognized SDNI task request was discarded {0}".
                                      format(task), "LOG_WARNING")
@@ -171,5 +169,5 @@ class SDNInterface(ControllerModule):
         self._lock.release()
         return topo
 
-    def sdn_tunnel_request(self, peer):
-        self.register_cbt("Topology", "TOP_REQUEST_OND_TUNNEL", peer)
+    def sdn_tunnel_request(self, **req_params):
+        self.register_cbt("Topology", "TOP_REQUEST_OND_TUNNEL", req_params)

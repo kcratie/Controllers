@@ -34,7 +34,6 @@ from sleekxmpp.xmlstream.handler.callback import Callback
 from sleekxmpp.xmlstream.matcher import StanzaPath
 from sleekxmpp.stanza.message import Message
 from controller.framework.ControllerModule import ControllerModule
-from controller.framework.ipoplib import RemoteAction
 
 
 class IpopSignal(ElementBase):
@@ -283,8 +282,8 @@ class Signal(ControllerModule):
 
     def initialize(self):
         self._presence_publisher = self._cfx_handle.publish_subscription("SIG_PEER_PRESENCE_NOTIFY")
-        for overlay_id in self._cm_config["Overlays"]:
-            overlay_descr = self._cm_config["Overlays"][overlay_id]
+        for overlay_id in self.overlays:
+            overlay_descr = self.overlays[overlay_id]
             self._circles[overlay_id] = {}
             self._circles[overlay_id]["PresenceTimer"] = time.time()
             self._circles[overlay_id]["JidCache"] = \
@@ -296,13 +295,9 @@ class Signal(ControllerModule):
                                                 self._circles[overlay_id]["OutgoingRemoteActs"])
         self.sig_log("Module loaded", "LOG_INFO")
 
-    @property
-    def overlays(self):
-        return [*self._circles.keys()]
-
     def req_handler_query_reporting_data(self, cbt):
         rpt = {}
-        for overlay_id in self._cm_config["Overlays"]:
+        for overlay_id in self.overlays:
             rpt[overlay_id] = {
                 "xmpp_host": self._circles[overlay_id]["Transport"].host(),
                 "xmpp_username": self._circles[overlay_id]["Transport"].boundjid.full
@@ -365,19 +360,17 @@ class Signal(ControllerModule):
                           Data="",
                           Status="")
         """
-        #rem_act = cbt.request.params
-        #peer_id = rem_act["RecipientId"]
-        #overlay_id = rem_act["OverlayId"]
-        #if overlay_id not in self._circles:
-        #    cbt.set_response("Overlay ID not found", False)
-        #    self.complete_cbt(cbt)
-        #    return
-        #rem_act["InitiatorId"] = self.node_id
-        #rem_act["InitiatorCM"] = cbt.request.initiator
-        #rem_act["ActionTag"] = cbt.tag
-        #self.transmit_remote_act(rem_act, peer_id, "invk")
-        rem_act = RemoteAction.from_cbt(cbt)
-        rem_act.tx_remote_act(self)
+        rem_act = cbt.request.params
+        peer_id = rem_act["RecipientId"]
+        overlay_id = rem_act["OverlayId"]
+        if overlay_id not in self._circles:
+            cbt.set_response("Overlay ID not found", False)
+            self.complete_cbt(cbt)
+            return
+        rem_act["InitiatorId"] = self.node_id
+        rem_act["InitiatorCM"] = cbt.request.initiator
+        rem_act["ActionTag"] = cbt.tag
+        self.transmit_remote_act(rem_act, peer_id, "invk")
 
     def resp_handler_remote_action(self, cbt):
         """ Convert the response CBT to a remote action and return to the initiator """
