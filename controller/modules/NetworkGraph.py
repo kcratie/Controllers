@@ -34,24 +34,24 @@ EdgeStates = ["CEStateUnknown", "CEStateCreated", "CEStateConnected", "CEStateDi
               "CEStateDeleting"]
 
 def transpose_edge_type(edge_type):
-    edge_type = EdgeTypes1[0]
+    et = EdgeTypes1[0]
     if edge_type == "CETypeEnforced":
-        edge_type = EdgeTypes2[1]
+        et = EdgeTypes2[1]
     elif edge_type == "CETypeSuccessor":
-        edge_type = EdgeTypes2[2]
+        et = EdgeTypes2[2]
     elif edge_type == "CETypeLongDistance":
-        edge_type = EdgeTypes2[3]
+        et = EdgeTypes2[3]
     elif edge_type == "CETypeOnDemand":
-        edge_type = EdgeTypes2[4]
+        et = EdgeTypes2[4]
     elif edge_type == "CETypeIEnforced":
-        edge_type = EdgeTypes1[1]
+        et = EdgeTypes1[1]
     elif edge_type == "CETypePredecessor":
-        edge_type = EdgeTypes1[2]
+        et = EdgeTypes1[2]
     elif edge_type == "CETypeILongDistance":
-        edge_type = EdgeTypes1[3]
+        et = EdgeTypes1[3]
     elif edge_type == "CETypeIOnDemand":
-        edge_type = EdgeTypes1[4]
-    return edge_type
+        et = EdgeTypes1[4]
+    return et
 
 class ConnectionEdge():
     """ A discriptor of the edge/link between two peers."""
@@ -65,7 +65,6 @@ class ConnectionEdge():
         self.connected_time = None
         self.edge_state = "CEStateUnknown"
         self.edge_type = edge_type
-        #self.edge_role = [edge_type]
         self.marked_for_delete = False
 
     def __key__(self):
@@ -150,11 +149,12 @@ class ConnectionEdge():
 class ConnEdgeAdjacenctList():
     """ A series of ConnectionEdges that are incident on the local node"""
     #def __init__(self, overlay_id, node_id, cfg):
-    def __init__(self, overlay_id, node_id, max_succ=0, max_ldl=0, max_ond=0):
+    def __init__(self, overlay_id, node_id, max_succ=1, max_ldl=1, max_ond=1):
         self.overlay_id = overlay_id
         self.node_id = node_id
         self.conn_edges = {}
-        self._successor_nid = None
+        self._successor_nid = node_id
+        self._predecessor_nid = node_id
         self.degree_threshold = (2 * (max_succ + max_ldl)) + max_ond
         self.max_successors = max_succ
         self.max_ldl = max_ldl
@@ -164,9 +164,12 @@ class ConnEdgeAdjacenctList():
         return len(self.conn_edges)
 
     def __repr__(self):
-        msg = "ConnEdgeAdjacenctList<overlay_id = %s, node_id = %s, successor_nid=%s, "\
-              "conn_edges = %s>" % (self.overlay_id, self.node_id, self._successor_nid,
-                                    self.conn_edges)
+        msg = "ConnEdgeAdjacenctList<overlay_id = %s, node_id = %s, predecessor_nid=%s, "\
+              "successor_nid=%s, max_successors=%d, max_ldl=%d, max_ondemand=%d, " \
+              "degree_threshold=%d, conn_edges = %s>" % \
+              (self.overlay_id, self.node_id, self._predecessor_nid, self._successor_nid,
+               self.max_successors, self.max_ldl, self.max_ondemand, self.degree_threshold,
+               self.conn_edges)
         return msg
 
     def __bool__(self):
@@ -191,28 +194,23 @@ class ConnEdgeAdjacenctList():
     def __iter__(self):
         return self.conn_edges.__iter__()
 
-    @property
-    def successor_ce(self):
-        return self.conn_edges.get(self._successor_nid)
+    def is_successor(self, peer_id):
+        return bool(peer_id == self._successor_nid)
+
+    def is_predecessor(self, peer_id):
+        return bool(peer_id == self._predecessor_nid)
+
+    def at_threshold(self):
+        return bool(len(self.conn_edges) >= self.degree_threshold)
 
     def add_connection_edge(self, ce):
         self.conn_edges[ce.peer_id] = ce
-        if not self._successor_nid:
-            self._successor_nid = ce.peer_id
-        elif ce.peer_id > self.node_id and ce.peer_id < self._successor_nid:
-            self._successor_nid = ce.peer_id
+        self.update_closest()
 
     def remove_connection_edge(self, peer_id):
-        ce = self.conn_edges.pop(peer_id, None)
-        if not self.conn_edges:
-            self._successor_nid = None
-        elif ce and ce.peer_id == self._successor_nid:
-            nl = [*self.conn_edges.keys()]
-            nl.append(self.node_id)
-            nl = sorted(nl)
-            idx = nl.index(self.node_id)
-            succ_i = (idx+1) % len(nl)
-            self._successor_nid = nl[succ_i]
+        self.conn_edges.pop(peer_id, None)
+        if peer_id in (self._successor_nid, self._predecessor_nid):
+            self.update_closest()
 
     def get_edges(self, edge_type):
         conn_edges = {}
@@ -235,3 +233,19 @@ class ConnEdgeAdjacenctList():
                     self.conn_edges[peer_id].edge_state == edge_state):
                 conn_edges[peer_id] = self.conn_edges[peer_id]
         return conn_edges
+
+    def update_closest(self):
+        """ track the closest successor and predecessor """
+        if not self.conn_edges:
+            return
+        nl = [*self.conn_edges.keys()]
+        nl.append(self.node_id)
+        nl = sorted(nl)
+        idx = nl.index(self.node_id)
+        nlen = len(nl)
+
+        succ_i = (idx+1) % nlen
+        self._successor_nid = nl[succ_i]
+
+        pred_i = (idx + nlen - 1) % nlen
+        self._predecessor_nid = nl[pred_i]

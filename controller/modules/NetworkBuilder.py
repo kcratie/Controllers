@@ -33,15 +33,23 @@ EdgeResponse = namedtuple("EdgeResponse", ["is_accepted", "data"])
 EdgeNegotiate = namedtuple("EdgeNegotiate", EdgeRequest._fields + EdgeResponse._fields)
 
 class NetworkBuilder():
+    _DEL_RETRY_INTERVAL = 10
     """description of class"""
     def __init__(self, top_man, overlay_id, node_id, max_wrkld):
         self._current_adj_list = ConnEdgeAdjacenctList(overlay_id, node_id)
-        self._refresh_in_progress = 0
         self._pending_adj_list = None
+        self._negotiated_edges = {}
+        self._refresh_in_progress = 0
+        self._max_concurrent_wrkload = max_wrkld
         self._lock = threading.Lock()
         self._top = top_man
-        self._max_concurrent_wrkload = max_wrkld
-        self._negotiated_edges = {}
+
+    def __repr__(self):
+        state = "current_adj_list=%s, pending_adj_list=%s, negotiated_edges=%s, "\
+                "refresh_in_progress=%s, _max_concurrent_wrkload=%s," % \
+                (self._current_adj_list, self._pending_adj_list, self._negotiated_edges,
+                 self._refresh_in_progress, self._max_concurrent_wrkload)
+        return state
 
     @property
     def is_ready(self):
@@ -62,28 +70,23 @@ class NetworkBuilder():
         with self._lock:
             return deepcopy(self._current_adj_list)
 
-    def refresh(self, net_graph):
+    def refresh(self, net_graph=None):
         """
-        Updates the networks connections. Invoked on different threads: 1) Periodically without
-        parameters to last to last provided network graph, 2) attempt to refresh now or schedule
-        the provide graph for refresh.
+        Transitions the overlay network overlay to the desired state specified by pending
+        adjacency list.
         """
         with self._lock:
-            self._top.top_log("New net graph:{0}\nCurrent adj list:{1}"
-                              .format(net_graph, self._current_adj_list))
-            if self._pending_adj_list:
-                self._top.top_log("Pending adj list:{0}"
-                                  .format(self._pending_adj_list))
-            # Nothing to do
-            if not self._is_ready() or (self._is_ready() and not net_graph):
-                self._top.top_log("Netbuilder nothing to do")
-                return
+            self._top.top_log("New net graph:{0}\nself:{1}".format(net_graph, self))
+            assert ((self._is_ready() and bool(net_graph)) or
+                    (not self._is_ready() and not bool(net_graph))),\
+                        "Netbuilder is not ready for a new net graph"
 
-            self._pending_adj_list = net_graph
-            self._current_adj_list.max_successors = net_graph.max_successors
-            self._current_adj_list.max_ldl = net_graph.max_ldl
-            self._current_adj_list.max_ondemand = net_graph.max_ondemand
-            self._current_adj_list.degree_threshold = net_graph.degree_threshold
+            if net_graph and self._is_ready():
+                self._pending_adj_list = net_graph
+                self._current_adj_list.max_successors = net_graph.max_successors
+                self._current_adj_list.max_ldl = net_graph.max_ldl
+                self._current_adj_list.max_ondemand = net_graph.max_ondemand
+                self._current_adj_list.degree_threshold = net_graph.degree_threshold
             self._process_pending_adj_list()
             return
 
@@ -114,7 +117,8 @@ class NetworkBuilder():
                 # leave the node in the adj list and marked for removal to be retried.
                 # the retry occurs too quickly and causes too many attempts before it succeeds
                 self._refresh_in_progress -= 1
-                self._current_adj_list[peer_id].created_time = time.time() + 10
+                self._current_adj_list[peer_id].created_time = \
+                    time.time() + NetworkBuilder._DEL_RETRY_INTERVAL
             elif connection_event["UpdateType"] == "CONNECTED":
                 self._current_adj_list.conn_edges[peer_id].edge_state = "CEStateConnected"
                 self._current_adj_list.conn_edges[peer_id].connected_time = \
@@ -125,13 +129,13 @@ class NetworkBuilder():
                 self._top.top_log("CEStateDisconnected event recvd peer_id: {0}, edge_id: {1}".
                                   format(peer_id, edge_id))
                 self._current_adj_list.conn_edges[peer_id].edge_state = "CEStateDisconnected"
+                self._refresh_in_progress += 1
                 self._top.top_remove_edge(overlay_id, peer_id)
             else:
                 self._top.top_log("Invalid UpdateType specified for connection update",
                                   level="LOG_WARNING")
             assert self._refresh_in_progress >= 0, "refresh in progress is negative {}"\
                 .format(self._refresh_in_progress)
-            self._process_pending_adj_list()
 
     def _mark_edges_for_removal(self):
         """
@@ -139,9 +143,10 @@ class NetworkBuilder():
         negotiated edges.
         """
         for peer_id in self._current_adj_list:
-            if not (self._current_adj_list[peer_id].edge_type in ng.EdgeTypes2 or peer_id in
-                    self._pending_adj_list):
-                self._current_adj_list.conn_edges[peer_id].marked_for_delete = True
+            if not (self._current_adj_list.is_successor(peer_id) or
+                    self._current_adj_list.is_predecessor(peer_id)):
+                if peer_id not in self._pending_adj_list:
+                    self._current_adj_list.conn_edges[peer_id].marked_for_delete = True
 
     def _remove_edges(self):
         """
@@ -149,41 +154,33 @@ class NetworkBuilder():
         edge if it is not the first successor.
         """
         overlay_id = self._current_adj_list.overlay_id
-        if len(self._current_adj_list) < self._current_adj_list.degree_threshold:
+        if self._current_adj_list.at_threshold():
             return # don't start deleting links until at the threshold
         for peer_id in self._current_adj_list:
             ce = self._current_adj_list[peer_id]
-            if (ce.marked_for_delete and
-                    ce.edge_state != "CEStateDeleting" and
-                    ce.create_time < time.time()):
-                if (self._current_adj_list.successor_ce and peer_id !=
-                        self._current_adj_list.successor_ce.peer_id):
-                    self._refresh_in_progress += 1
-                    ce.edge_state = "CEStateDeleting"
-                    self._top.top_remove_edge(overlay_id, peer_id)
-                    return
+            if (ce.marked_for_delete and ce.edge_state != "CEStateDeleting" and
+                    ce.created_time < time.time()):
+                self._refresh_in_progress += 1
+                ce.edge_state = "CEStateDeleting"
+                self._top.top_remove_edge(overlay_id, peer_id)
+                return
 
     def _create_new_edges(self):
         """ Any edge in set (Pending - Active) is created and added to Active """
-        #overlay_id = self._current_adj_list.overlay_id
         rmv_list = []
         for peer_id in self._pending_adj_list:
-            if self._pending_adj_list[peer_id].edge_type in ng.EdgeTypes2:
-                # negotiated edge in the pending list will be discarded
-                rmv_list.append(peer_id)
-                continue
             if self._is_max_concurrent_workload():
                 break
             rmv_list.append(peer_id)
+            if self._current_adj_list.at_threshold() and ce.edge_type != "CETypeSuccessor":
+                continue
+            if peer_id in self._negotiated_edges:  # an edge has already been negotiated
+                continue
             if peer_id not in self._current_adj_list.conn_edges:
-                if peer_id in self._negotiated_edges:
-                    continue
-                self._current_adj_list.conn_edges[peer_id] = \
-                    self._pending_adj_list.conn_edges[peer_id]
-                assert self._current_adj_list.conn_edges[peer_id].edge_state == "CEStateUnknown"
-                self._negotiate_new_edge(self._pending_adj_list.conn_edges[peer_id].edge_id,
-                                         self._pending_adj_list.conn_edges[peer_id].edge_type,
-                                         peer_id)
+                ce = self._pending_adj_list.conn_edges[peer_id]
+                assert ce.edge_state == "CEStateUnknown", "State!=CEStateUnknown CE={0}".format(ce)
+                self._current_adj_list.conn_edges[peer_id] = ce
+                self._negotiate_new_edge(ce.edge_id, ce.edge_type, peer_id)
 
         for peer_id in rmv_list:
             del self._pending_adj_list[peer_id]
@@ -193,6 +190,8 @@ class NetworkBuilder():
         Sync the network state by determining the difference between the active and pending net
         graphs. Create new successors edges before removing existing ones.
         """
+        if not self._pending_adj_list:
+            return # incoming connections can occur before a pending list is created
         if self._current_adj_list.overlay_id != self._pending_adj_list.overlay_id:
             raise ValueError("Overlay ID mismatch adj lists, active:{0}, pending:{1}".
                              format(self._current_adj_list.overlay_id,
@@ -220,7 +219,7 @@ class NetworkBuilder():
         peer_id = edge_req.initiator_id
         edge_state = self._current_adj_list.conn_edges[peer_id].edge_state
         edge_resp = None
-        if edge_state == "CEStateConnected":
+        if edge_state in ("CEStateCreated", "CEStateConnected"):
             msg = "E1 - A connected edge already exists. TunnelId={0}"\
                 .format(self._current_adj_list[peer_id].edge_id[:7])
             edge_resp = EdgeResponse(is_accepted=False, data=msg)
@@ -232,7 +231,7 @@ class NetworkBuilder():
             self._top.top_log(msg)
         elif edge_state == "CEStateUnknown" and nid > edge_req.initiator_id:
             ce = self._current_adj_list.conn_edges.pop(peer_id)
-            ce.edge_edge_type = ng.transpose_edge_type(edge_req.edge_type)
+            ce.edge_type = ng.transpose_edge_type(edge_req.edge_type)
             self._negotiated_edges[peer_id] = ce
             msg = "E0 - Edge collision override accepted. Tunnel remapped {0}->{1}"\
                 .format(ce.edge_id[:7], edge_req.edge_id[:7])
@@ -240,6 +239,7 @@ class NetworkBuilder():
             edge_resp = EdgeResponse(is_accepted=True, data=msg)
             self._top.top_log(msg)
             self._top.top_log("Existing CE={0} moved to negotiated_edges={1}".format(ce, self._negotiated_edges))
+        assert bool(edge_resp), "NetBuilder={0}".format(self)
         return edge_resp
 
     def negotiate_incoming_edge(self, edge_req):
@@ -250,17 +250,15 @@ class NetworkBuilder():
         with self._lock:
             if peer_id in self._current_adj_list.conn_edges:
                 edge_resp = self._resolve_request_collision(edge_req)
-
-            elif len(self._current_adj_list) >= (2*self._current_adj_list.degree_threshold):
-                edge_resp = EdgeResponse(is_accepted=False, data="E3 - Too many existing edges. Threshold={0}".format(self._current_adj_list.degree_threshold))
-
-            elif (len(self._current_adj_list) < (2*self._current_adj_list.degree_threshold) and
-                  edge_req.edge_type == "CETypeSuccessor"):
+            elif len(self._current_adj_list) > (2*self._current_adj_list.degree_threshold):
+                edge_resp = EdgeResponse(is_accepted=False, data="E3 - Too many existing edges.")
+            elif self._current_adj_list.at_threshold() and edge_req.edge_type == "CETypeSuccessor":
                 edge_resp = EdgeResponse(is_accepted=True, data="Successor edge permitted")
-
-            #elif len(self._current_adj_list) < self._current_adj_list.degree_threshold:
-            else:
+            elif not self._current_adj_list.at_threshold():
                 edge_resp = EdgeResponse(is_accepted=True, data="Any edge permitted")
+            else:
+                edge_resp = EdgeResponse(is_accepted=False,
+                                         data="E5 - Too many low priority edges.")
 
             if edge_resp.is_accepted and edge_resp.data[:2] != "E0":
                 et = ng.transpose_edge_type(edge_req.edge_type)

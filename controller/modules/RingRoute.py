@@ -209,6 +209,8 @@ class netNode():
                 self.logger.warning("Failed to do send recv: %s", str(err))
                 if attempts < 2:
                     time.sleep(1)
+            except json.errors.JSONDecodeError as err:
+                self.logger.warning("JSON ERROR=%s, rcvd string=%s", str(err), received)
             finally:
                 sock.close()
         return recv_data

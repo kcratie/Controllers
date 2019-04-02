@@ -95,16 +95,6 @@ class Topology(ControllerModule, CFX):
     def terminate(self):
         pass
 
-    def _do_topo_change_post(self, overlay_id):
-        # create and post the dict of adjacent connection edges
-        adjl = self._net_ovls[overlay_id]["NetBuilder"].get_adj_list()
-        topo = {}
-        for peer_id in adjl.conn_edges:
-            if adjl.conn_edges[peer_id].edge_state == "CEStateConnected":
-                topo[peer_id] = dict(adjl.conn_edges[peer_id]) # create a dict from CE
-        update = {"OverlayId": overlay_id, "Topology": topo}
-        self._topo_changed_publisher.post_update(update)
-
     def resp_handler_create_tnl(self, cbt):
         params = cbt.request.params
         olid = params["OverlayId"]
@@ -138,8 +128,7 @@ class Topology(ControllerModule, CFX):
         with self._lock:
             disc = self._net_ovls[olid]["KnownPeers"].get(peer_id)
             if not disc:
-                disc = DiscoveredPeer(peer_id)
-                self._net_ovls[olid]["KnownPeers"][peer_id] = disc
+                self._net_ovls[olid]["KnownPeers"][peer_id] = DiscoveredPeer(peer_id)
                 new_disc = True
             if new_disc or disc.is_excluded:
                 self._net_ovls[olid]["NewPeerCount"] += 1
@@ -154,20 +143,20 @@ class Topology(ControllerModule, CFX):
         cbt.set_response(None, True)
         self.complete_cbt(cbt)
 
-    def req_handler_query_peer_ids(self, cbt):
-        peer_ids = {}
-        try:
-            with self._lock:
-                for olid in self.config["Overlays"]:
-                    peer_ids[olid] = set(peer_id for peer_id in self._net_ovls[olid]["KnownPeers"]\
-                        if not self._net_ovls[olid]["KnownPeers"][peer_id].is_excluded)
-                cbt.set_response(data=peer_ids, status=True)
-                self.complete_cbt(cbt)
-        except KeyError:
-            cbt.set_response(data=None, status=False)
-            self.complete_cbt(cbt)
-            self.register_cbt("Logger", "LOG_WARNING", "Overlay Id is not valid {0}".
-                              format(cbt.response.data))
+    #def req_handler_query_peer_ids(self, cbt):
+    #    peer_ids = {}
+    #    try:
+    #        with self._lock:
+    #            for olid in self.config["Overlays"]:
+    #                peer_ids[olid] = set(peer_id for peer_id in self._net_ovls[olid]["KnownPeers"]\
+    #                    if not self._net_ovls[olid]["KnownPeers"][peer_id].is_excluded)
+    #            cbt.set_response(data=peer_ids, status=True)
+    #            self.complete_cbt(cbt)
+    #    except KeyError:
+    #        cbt.set_response(data=None, status=False)
+    #        self.complete_cbt(cbt)
+    #        self.register_cbt("Logger", "LOG_WARNING", "Overlay Id is not valid {0}".
+    #                          format(cbt.response.data))
 
     def req_handler_vis_data(self, cbt):
         topo_data = {}
@@ -215,10 +204,6 @@ class Topology(ControllerModule, CFX):
         cbt.set_response(None, True)
         self.complete_cbt(cbt)
 
-    def request_handler_tunnel_req(self, cbt):
-        cbt.set_response("Accept", True)
-        self.complete_cbt(cbt)
-
     def req_handler_req_ond_tunnel(self, cbt):
         """
         Add the request params for creating an on demand tunnel
@@ -245,10 +230,14 @@ class Topology(ControllerModule, CFX):
             edge_cbt.set_response("Unknown overlay id specified in edge request", False)
             self.complete_cbt(edge_cbt)
             return
+        peer_id = edge_req.initiator_id
+        if peer_id not in self._net_ovls[olid]["KnownPeers"]:
+            # this node miss the presence notification, so add to KnownPeers
+            self._net_ovls[olid]["KnownPeers"][peer_id] = DiscoveredPeer(peer_id)
         if self.config["Overlays"][olid].get("Role", "Switch").casefold() == "leaf".casefold():
             self.register_cbt("Logger", "LOG_INFO", "Rejected edge negotiation as config specifies"
                               " leaf device")
-            edge_cbt.set_response("E5 - Not accepting incoming connections, leaf device", False)
+            edge_cbt.set_response("E6 - Not accepting incoming connections, leaf device", False)
             self.complete_cbt(edge_cbt)
             return
         edge_resp = self._net_ovls[olid]["NetBuilder"].negotiate_incoming_edge(edge_req)
@@ -304,12 +293,10 @@ class Topology(ControllerModule, CFX):
                 self.req_handler_peer_presence(cbt)
             elif cbt.request.action == "VIS_DATA_REQ":
                 self.req_handler_vis_data(cbt)
-            elif cbt.request.action == "TOP_QUERY_PEER_IDS":
-                self.req_handler_query_peer_ids(cbt)
+            #elif cbt.request.action == "TOP_QUERY_PEER_IDS":
+            #    self.req_handler_query_peer_ids(cbt)
             elif cbt.request.action == "LNK_TUNNEL_EVENTS":
                 self.req_handler_tnl_data_update(cbt)
-            elif cbt.request.action == "TOP_INCOMING_TUNNEL_REQ":
-                self.request_handler_tunnel_req(cbt)
             elif cbt.request.action == "TOP_REQUEST_OND_TUNNEL":
                 self.req_handler_req_ond_tunnel(cbt)
             elif cbt.request.action == "TOP_NEGOTIATE_EDGE":
@@ -333,42 +320,6 @@ class Topology(ControllerModule, CFX):
                 if (parent_cbt is not None and parent_cbt.child_count == 1):
                     parent_cbt.set_response(cbt_data, cbt_status)
                     self.complete_cbt(parent_cbt)
-
-    def _update_overlay(self, olid):
-        net_ovl = self._net_ovls[olid]
-        nb = net_ovl["NetBuilder"]
-        if nb.is_ready:
-            ovl_cfg = self.config["Overlays"][olid]
-            self.register_cbt("Logger", "LOG_DEBUG", "Initiating topology refresh ...")
-            enf_lnks = ovl_cfg.get("EnforcedLinks", {})
-            manual_topo = ovl_cfg.get("ManualTopology", False)
-            peer_list = [peer_id for peer_id in net_ovl["KnownPeers"] \
-                if not net_ovl["KnownPeers"][peer_id].is_excluded]
-
-            max_succ = int(ovl_cfg.get("MaxSuccessors", 1))
-            max_ond = int(ovl_cfg.get("MaxOnDemandEdges", 2))
-            max_ldl = int(ovl_cfg.get("MaxLongDistEdges", math.floor(math.log(len(peer_list), 2))))
-            if max_ldl < 4:
-                max_ldl = 4
-            params = {"OverlayId": olid, "NodeId": self.node_id, "Peers": peer_list,
-                      "EnforcedEdges": enf_lnks, "MaxSuccessors": max_succ,
-                      "MaxLongDistEdges": max_ldl, "MaxOnDemandEdges": max_ond,
-                      "ManualTopology": manual_topo}
-            gb = GraphBuilder(params)
-            adjl = gb.build_adj_list(nb.get_adj_list(), net_ovl["OndPeers"])
-            nb.refresh(adjl)
-            net_ovl["NewPeerCount"] = 0
-        else:
-            self.register_cbt("Logger", "LOG_DEBUG", "Net builder not yet ready, skipping...")
-
-    def _authorize_edge(self, overlay_id, peer_id, edge_id, parent_cbt):
-        self.register_cbt("Logger", "LOG_INFO", "Authorizing peer edge from {0}:{1}->{2}"
-                          .format(overlay_id, peer_id[:7], self.node_id[:7]))
-        params = {"OverlayId": overlay_id, "PeerId": peer_id, "TunnelId": edge_id}
-        cbt = self.create_linked_cbt(parent_cbt)
-        cbt.set_request(self.module_name, "LinkManager", "LNK_AUTH_TUNNEL", params)
-        self.submit_cbt(cbt)
-
 
     def manage_topology(self):
         # Periodically refresh the topology, making sure desired links exist and exipred ones are
@@ -416,3 +367,49 @@ class Topology(ControllerModule, CFX):
         #edge_cbt = self.create_cbt(self.module_name, "Signal", "SIG_REMOTE_ACTION", remote_act)
         ## Send the message via SIG server to peer
         #self.submit_cbt(edge_cbt)
+
+    def _do_topo_change_post(self, overlay_id):
+        # create and post the dict of adjacent connection edges
+        adjl = self._net_ovls[overlay_id]["NetBuilder"].get_adj_list()
+        topo = {}
+        for peer_id in adjl.conn_edges:
+            if adjl.conn_edges[peer_id].edge_state == "CEStateConnected":
+                topo[peer_id] = dict(adjl.conn_edges[peer_id]) # create a dict from CE
+        update = {"OverlayId": overlay_id, "Topology": topo}
+        self._topo_changed_publisher.post_update(update)
+
+    def _update_overlay(self, olid):
+        net_ovl = self._net_ovls[olid]
+        nb = net_ovl["NetBuilder"]
+        if nb.is_ready:
+            ovl_cfg = self.config["Overlays"][olid]
+            self.register_cbt("Logger", "LOG_DEBUG", "Netbuilder initiating refresh ...")
+            enf_lnks = ovl_cfg.get("EnforcedLinks", {})
+            manual_topo = ovl_cfg.get("ManualTopology", False)
+            peer_list = [peer_id for peer_id in net_ovl["KnownPeers"] \
+                if not net_ovl["KnownPeers"][peer_id].is_excluded]
+
+            max_succ = int(ovl_cfg.get("MaxSuccessors", 1))
+            max_ond = int(ovl_cfg.get("MaxOnDemandEdges", 2))
+            max_ldl = int(ovl_cfg.get("MaxLongDistEdges", math.floor(math.log(len(peer_list), 2))))
+            if max_ldl < 4:
+                max_ldl = 4
+            params = {"OverlayId": olid, "NodeId": self.node_id, "Peers": peer_list,
+                      "EnforcedEdges": enf_lnks, "MaxSuccessors": max_succ,
+                      "MaxLongDistEdges": max_ldl, "MaxOnDemandEdges": max_ond,
+                      "ManualTopology": manual_topo}
+            gb = GraphBuilder(params)
+            adjl = gb.build_adj_list(nb.get_adj_list(), net_ovl["OndPeers"])
+            nb.refresh(adjl)
+            net_ovl["NewPeerCount"] = 0
+        else:
+            self.register_cbt("Logger", "LOG_DEBUG", "Netbuilder resuming...")
+            nb.refresh()
+
+    def _authorize_edge(self, overlay_id, peer_id, edge_id, parent_cbt):
+        self.register_cbt("Logger", "LOG_INFO", "Authorizing peer edge from {0}:{1}->{2}"
+                          .format(overlay_id, peer_id[:7], self.node_id[:7]))
+        params = {"OverlayId": overlay_id, "PeerId": peer_id, "TunnelId": edge_id}
+        cbt = self.create_linked_cbt(parent_cbt)
+        cbt.set_request(self.module_name, "LinkManager", "LNK_AUTH_TUNNEL", params)
+        self.submit_cbt(cbt)

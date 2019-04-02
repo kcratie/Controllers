@@ -70,12 +70,6 @@ class GraphBuilder():
     def _build_successors(self, adj_list):
         successors = self._get_successors()
         for peer_id in successors:
-            # ce_cnd = adj_list.conn_edge.get(peer_id)
-            # exclude if peer was previously added to either adj list
-            #if ce_cnd and ce_cnd.edge_type == "CETypeEnforced": continue
-            #ce_cnd = transition_adj_list.conn_edge.get(peer_id)
-            #if ce_cnd and (ce_cnd.edge_type == "CETypeEnforced" or
-            #               ce_cnd.edge_type in EdgeType2): continue
             if peer_id not in adj_list:
                 ce = ConnectionEdge(peer_id, edge_type="CETypeSuccessor")
                 adj_list.add_connection_edge(ce)
@@ -107,9 +101,10 @@ class GraphBuilder():
         # Add potential long distance link candidates to the adjacency list
         existing_ldlnks = transition_adj_list.get_edges("CETypeLongDistance")
         num_existing_ldl = 0
-        for peer_id in existing_ldlnks:
-            if peer_id not in adj_list:
-                adj_list[peer_id] = existing_ldlnks[peer_id]
+        for peer_id, ce in existing_ldlnks.items():
+            if ce.edge_state in ("CEStateUnknown", "CEStateCreated", "CEStateConnected") and \
+                peer_id not in adj_list:
+                adj_list[peer_id] = ConnectionEdge(peer_id, ce.edge_id, ce.edge_type)
                 num_existing_ldl += 1
         num_ldl = self._max_ldl_cnt - self._max_successors - num_existing_ldl
         if num_ldl < 0:
@@ -148,6 +143,8 @@ class GraphBuilder():
             self._build_long_dist_links(adj_list, transition_adj_list)
             if request_list:
                 self._build_ondemand_links(adj_list, transition_adj_list, request_list)
+        for _, ce in adj_list.conn_edges.items():
+            assert ce.edge_state == "CEStateUnknown", "Invalid CE edge state, CE={}".format(ce)
         return adj_list
 
     def build_adj_list_ata(self,):
