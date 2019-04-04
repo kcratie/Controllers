@@ -94,7 +94,7 @@ class ConnectionEdge():
     def __repr__(self):
         msg = ("ConnectionEdge<peer_id = %s, edge_id = %s, created_time = %s, connected_time = %s,"
                " state = %s, edge_type = %s, marked_for_delete = %s>" %
-               (self.peer_id, self.edge_id, str(self.created_time), str(self.connected_time),
+               (self.peer_id[:7], self.edge_id[:7], str(self.created_time), str(self.connected_time),
                 self.edge_state, self.edge_type, self.marked_for_delete))
         #msg = ("ConnectionEdge<peer_id = %s, edge_id = %s, state = %s, edge_type = %s>" %
         #       (self.peer_id, self.edge_id, self.edge_state, self.edge_type))
@@ -165,11 +165,11 @@ class ConnEdgeAdjacenctList():
 
     def __repr__(self):
         msg = "ConnEdgeAdjacenctList<overlay_id = %s, node_id = %s, predecessor_nid=%s, "\
-              "successor_nid=%s, max_successors=%d, max_ldl=%d, max_ondemand=%d, " \
+              "successor_nid=%s, num_edges=%d, max_successors=%d, max_ldl=%d, max_ondemand=%d, " \
               "degree_threshold=%d, conn_edges = %s>" % \
-              (self.overlay_id, self.node_id, self._predecessor_nid, self._successor_nid,
-               self.max_successors, self.max_ldl, self.max_ondemand, self.degree_threshold,
-               self.conn_edges)
+              (self.overlay_id[:7], self.node_id[:7], self._predecessor_nid[:7],
+               self._successor_nid[:7], len(self.conn_edges), self.max_successors, self.max_ldl,
+               self.max_ondemand, self.degree_threshold, self.conn_edges)
         return msg
 
     def __bool__(self):
@@ -208,30 +208,33 @@ class ConnEdgeAdjacenctList():
         self.update_closest()
 
     def remove_connection_edge(self, peer_id):
-        self.conn_edges.pop(peer_id, None)
+        ce = self.conn_edges.pop(peer_id, None)
         if peer_id in (self._successor_nid, self._predecessor_nid):
             self.update_closest()
+        return ce
 
-    def get_edges(self, edge_type):
+    def edges_bytype(self, edge_type):
         conn_edges = {}
         for peer_id in self.conn_edges:
-            if self.conn_edges[peer_id].edge_type == edge_type:
+            if self.conn_edges[peer_id].edge_type in edge_type:
                 conn_edges[peer_id] = self.conn_edges[peer_id]
         return conn_edges
 
-    def edge_type_count(self, edge_type):
-        cnt = 0
-        for peer_id in self.conn_edges:
-            if self.conn_edges[peer_id].edge_type == edge_type:
-                cnt = cnt + 1
-        return cnt
-
-    def filter(self, edge_type, edge_state):
+    def edge_bystate(self, edge_state):
         conn_edges = {}
         for peer_id in self.conn_edges:
-            if (self.conn_edges[peer_id].edge_type == edge_type and
-                    self.conn_edges[peer_id].edge_state == edge_state):
+            if self.conn_edges[peer_id].edge_state in edge_state:
                 conn_edges[peer_id] = self.conn_edges[peer_id]
+        return conn_edges
+
+    def filter(self, edges):
+        """ Input is a list of edge state/type tuples """
+        conn_edges = {}
+        for peer_id in self.conn_edges:
+            for etup in edges:
+                if (self.conn_edges[peer_id].edge_type == etup[0] and
+                        self.conn_edges[peer_id].edge_state == etup[1]):
+                    conn_edges[peer_id] = self.conn_edges[peer_id]
         return conn_edges
 
     def update_closest(self):

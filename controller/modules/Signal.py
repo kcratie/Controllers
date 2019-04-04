@@ -271,7 +271,7 @@ class Signal(ControllerModule):
         self._circles = {}
         self._remote_acts = {}
         self._lock = threading.Lock()
-        self.request_timeout = self._cm_config["TimerInterval"] - 1
+        self.request_timeout = self._cfx_handle.query_param("RequestTimeout")
         self._scavenge_timer = time.time()
 
     def _create_transport_instance(self, overlay_id, overlay_descr, jid_cache, outgoing_rem_acts):
@@ -425,10 +425,10 @@ class Signal(ControllerModule):
     def timer_method(self):
         with self._lock:
             for overlay_id in self._circles:
-                #pt = self._circles[overlay_id]["PresenceTimer"]
-                #if time.time() - pt >= int(self.config["PresenceInterval"]):
-                #    self._circles[overlay_id]["Transport"].send_presence(pstatus="ident#" +
-                #                                                         self.node_id)
+                pt = self._circles[overlay_id]["PresenceTimer"]
+                if time.time() - pt >= int(self.config["PresenceInterval"]):
+                    self._circles[overlay_id]["Transport"].send_presence(pstatus="ident#" +
+                                                                         self.node_id)
                 self._circles[overlay_id]["JidCache"].scavenge()
                 self.scavenge_expired_outgoing_rem_acts(self._circles[overlay_id]
                                                         ["OutgoingRemoteActs"])

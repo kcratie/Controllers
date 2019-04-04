@@ -158,7 +158,6 @@ class LinkManager(ControllerModule):
 
     def req_handler_remove_tnl(self, cbt):
         """Remove the tunnel and link given either the overlay id and peer id, or the tunnel id"""
-        # not currently being used
         olid = cbt.request.params.get("OverlayId", None)
         peer_id = cbt.request.params.get("PeerId", None)
         tnlid = cbt.request.params.get("TunnelId", None)
@@ -180,6 +179,7 @@ class LinkManager(ControllerModule):
 
     def req_handler_remove_link(self, cbt):
         """Remove the link given either the overlay id and peer id, or the link id or tunnel id"""
+        # not currently being used
         olid = cbt.request.params.get("OverlayId", None)
         peer_id = cbt.request.params.get("PeerId", None)
         lnkid = cbt.request.params.get("LinkId", None)
@@ -325,12 +325,15 @@ class LinkManager(ControllerModule):
         param = {
             "UpdateType": "REMOVED", "OverlayId": olid, "TunnelId": tnlid, "LinkId": lnkid,
             "PeerId": peer_id}
+        if tnlid not in self._tunnels:
+            return
         if self._tunnels[tnlid].tap_name:
             param["TapName"] = self._tunnels[tnlid].tap_name
         self._link_updates_publisher.post_update(param)
         self._cleanup_removed_tunnel(tnlid)
         self.free_cbt(rmv_tnl_cbt)
         if parent_cbt is not None:
+            assert False, "Why this case parent_cbt={}".format(parent_cbt)
             if parent_cbt.request.action == "LNK_REQ_LINK_ENDPT":
                 self.req_handler_req_link_endpt(parent_cbt)
             else:
@@ -976,13 +979,11 @@ class LinkManager(ControllerModule):
 
     def _cleanup_expired_incomplete_links(self):
         link_expire = self.config["LinkSetupTimeout"]
-        link_ids = list(self._tunnels.keys())
-        for lnkid in link_ids:
-            tnl = self._tunnels[lnkid]
+        for tnlid, tnl in self._tunnels.items():
             if (tnl.link is not None and \
                 tnl.link.creation_state != 0xC0 and \
                 time.time() - tnl.creation_start_time > link_expire):
-                self._rollback_link_creation_changes(lnkid)
+                self._rollback_link_creation_changes(tnlid)
 
     def timer_method(self):
         with self._lock:

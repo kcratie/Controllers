@@ -943,7 +943,7 @@ class FloodingBounds():
             bound_nid = prev.bound_nid
             hops = prev.hop_count + 1
 
-        succ_nodes = self._net_node.topo.filter("CETypeSuccessor", "CEStateConnected")
+        succ_nodes = self._net_node.topo.filter([("CETypeSuccessor", "CEStateConnected")])
         if succ_nodes:
             succ_id_list = sorted([*succ_nodes.keys()])
             first_succ_id = succ_id_list[0]

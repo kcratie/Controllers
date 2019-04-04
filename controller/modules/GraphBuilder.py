@@ -89,7 +89,6 @@ class GraphBuilder():
         all_nodes = sorted(self._peers + [self._node_id])
         network_sz = len(all_nodes)
         my_index = all_nodes.index(self._node_id)
-        # num_peers = len(self._peers)
         node_off = GraphBuilder.symphony_prob_distribution(network_sz, num_ldl)
         for i in node_off:
             idx = math.floor(network_sz*i)
@@ -98,15 +97,21 @@ class GraphBuilder():
         return long_dist_links
 
     def _build_long_dist_links(self, adj_list, transition_adj_list):
-        # Add potential long distance link candidates to the adjacency list
-        existing_ldlnks = transition_adj_list.get_edges("CETypeLongDistance")
+        # Preserve existing long distance
+        ldlnks = transition_adj_list.edges_bytype(["CETypeILongDistance"])
+        for peer_id, ce in ldlnks.items():
+            if ce.edge_state in ("CEStateUnknown", "CEStateCreated", "CEStateConnected") and \
+                peer_id not in adj_list:
+                adj_list[peer_id] = ConnectionEdge(peer_id, ce.edge_id, ce.edge_type)
+
+        ldlnks = transition_adj_list.edges_bytype(["CETypeLongDistance"])
         num_existing_ldl = 0
-        for peer_id, ce in existing_ldlnks.items():
+        for peer_id, ce in ldlnks.items():
             if ce.edge_state in ("CEStateUnknown", "CEStateCreated", "CEStateConnected") and \
                 peer_id not in adj_list:
                 adj_list[peer_id] = ConnectionEdge(peer_id, ce.edge_id, ce.edge_type)
                 num_existing_ldl += 1
-        num_ldl = self._max_ldl_cnt - self._max_successors - num_existing_ldl
+        num_ldl = self._max_ldl_cnt - num_existing_ldl
         if num_ldl < 0:
             return
         ldl = self._get_long_dist_links(num_ldl)
@@ -116,7 +121,14 @@ class GraphBuilder():
                 adj_list.add_connection_edge(ce)
 
     def _build_ondemand_links(self, adj_list, transition_adj_list, request_list):
-        tmp = []
+        ond = {}
+        # add existing on demand links
+        existing = transition_adj_list.edges_bytype(["CETypeOnDemand", "CETypeIOnDemand"])
+        for peer_id, ce in existing.items():
+            if ce.edge_state in ("CEStateUnknown", "CEStateCreated", "CEStateConnected") and \
+                peer_id not in adj_list:
+                ond[peer_id] = ConnectionEdge(peer_id, ce.edge_id, ce.edge_type)
+
         for task in request_list:
             peer_id = task["PeerId"]
             op = task["Operation"]
@@ -124,15 +136,13 @@ class GraphBuilder():
                 if peer_id in self._peers and (peer_id not in adj_list or
                                                peer_id not in transition_adj_list):
                     ce = ConnectionEdge(peer_id, edge_type="CETypeOnDemand")
-                    adj_list.add_connection_edge(ce)
+                    ond[peer_id](ce)
             elif op == "REMOVE":
-                if peer_id in transition_adj_list and \
-                    transition_adj_list[peer_id].edge_type == "CETypeOnDemand":
-                    transition_adj_list.pop(peer_id)
-            tmp.append(peer_id)
-
-        for peer_id in tmp:
-            request_list.pop(peer_id)
+                ond.pop(peer_id, None)
+        for peer_id in ond:
+            if peer_id not in adj_list:
+                adj_list[peer_id] = ond[peer_id]
+        request_list.clear()
 
     def build_adj_list(self, transition_adj_list, request_list=None):
         adj_list = ConnEdgeAdjacenctList(self.overlay_id, self._node_id,
