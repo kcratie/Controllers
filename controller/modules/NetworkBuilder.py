@@ -20,6 +20,7 @@
 # THE SOFTWARE.
 
 import threading
+import math
 import time
 from copy import deepcopy
 from collections import namedtuple
@@ -264,7 +265,7 @@ class NetworkBuilder():
         #with self._lock:
         if peer_id in self._current_adj_list:
             edge_resp = self._resolve_request_collision(edge_req)
-        elif len(self._current_adj_list) > (2*self._current_adj_list.degree_threshold):
+        elif len(self._current_adj_list) > math.floor(1.5*self._current_adj_list.degree_threshold):
             edge_resp = EdgeResponse(is_accepted=False, data="E3 - Too many existing edges.")
         elif self._current_adj_list.at_threshold() and edge_req.edge_type == "CETypeSuccessor":
             edge_resp = EdgeResponse(is_accepted=True, data="Successor edge permitted")
