@@ -385,6 +385,7 @@ class Topology(ControllerModule, CFX):
             manual_topo = ovl_cfg.get("ManualTopology", False)
             peer_list = [peer_id for peer_id in net_ovl["KnownPeers"] \
                 if not net_ovl["KnownPeers"][peer_id].is_excluded]
+            self.register_cbt("Logger", "LOG_DEBUG", "Peerlist for Netbuilder {0}".format(peer_list))
 
             max_succ = int(ovl_cfg.get("MaxSuccessors", 1))
             max_ond = int(ovl_cfg.get("MaxOnDemandEdges", 2))

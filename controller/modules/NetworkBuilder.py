@@ -19,7 +19,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 # THE SOFTWARE.
 
-import threading
+#import threading
 import math
 import time
 from copy import deepcopy
@@ -130,13 +130,13 @@ class NetworkBuilder():
         elif connection_event["UpdateType"] == "DISCONNECTED":
             # the local topology did not request removal of the connection
             self._top.top_log("CEStateDisconnected event recvd peer_id: {0}, edge_id: {1}".
-                                format(peer_id, edge_id))
+                              format(peer_id, edge_id))
             self._current_adj_list[peer_id].edge_state = "CEStateDisconnected"
             self._refresh_in_progress += 1
             self._top.top_remove_edge(overlay_id, peer_id)
         else:
             self._top.top_log("Invalid UpdateType specified for connection update",
-                                level="LOG_WARNING")
+                              level="LOG_WARNING")
         assert self._refresh_in_progress >= 0, "refresh in progress is negative {}"\
             .format(self._refresh_in_progress)
 
@@ -247,7 +247,7 @@ class NetworkBuilder():
             self._negotiated_edges[peer_id] = ce
             msg = "E0 - Edge collision override accepted. Tunnel remapped {0}->{1}"\
                 .format(ce.edge_id[:7], edge_req.edge_id[:7])
-            ce._edge_id = edge_req.edge_id
+            ce.edge_id = edge_req.edge_id
             edge_resp = EdgeResponse(is_accepted=True, data=msg)
             self._top.top_log(msg)
             self._top.top_log("Existing CE={0} moved to negotiated_edges={1}".format(ce, self._negotiated_edges))
@@ -273,7 +273,7 @@ class NetworkBuilder():
             edge_resp = EdgeResponse(is_accepted=True, data="Any edge permitted")
         else:
             edge_resp = EdgeResponse(is_accepted=False,
-                                        data="E5 - Too many low priority edges.")
+                                     data="E5 - Too many low priority edges.")
 
         if edge_resp.is_accepted and edge_resp.data[:2] != "E0":
             et = ng.transpose_edge_type(edge_req.edge_type)
@@ -296,8 +296,8 @@ class NetworkBuilder():
         if edge_nego.recipient_id not in self._current_adj_list and \
             edge_nego.recipient_id not in self._negotiated_edges:
             self._top.top_log("Peer Id from edge negotiation not in current adjacency list or "
-                                " _negotiated_edges. The transaction has been discarded.",
-                                "LOG_ERROR")
+                              " _negotiated_edges. The transaction has been discarded.",
+                              "LOG_ERROR")
             return
         peer_id = edge_nego.recipient_id
         edge_id = edge_nego.edge_id
@@ -314,7 +314,7 @@ class NetworkBuilder():
             else:
                 if ce.edge_id != edge_nego.edge_id:
                     self._top.top_log("EdgeNego parameters does not match current adjacency list, "
-                                        "The transaction has been discarded.", "LOG_ERROR")
+                                      "The transaction has been discarded.", "LOG_ERROR")
                     del self._current_adj_list[ce.peer_id]
                     self._refresh_in_progress -= 1
                 else:

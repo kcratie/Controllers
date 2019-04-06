@@ -217,6 +217,14 @@ class netNode():
 
 ###################################################################################################
 ###################################################################################################
+class PeerSwitch():
+    def __init__(self):
+        self.port_no = None
+        self.leaf_macs = set()
+
+    def __repr__(self):
+        return "PeerSwitch<port_no={0}, leaf_macs={1}>".format(self.port_no, self.leaf_macs)
+
 class LearningTable():
     FlowDescriptor = namedtuple("FlowDescriptor", ["src", "dst", "ingress", "outgress", "revert"])
     def __init__(self, ryu):
@@ -226,6 +234,7 @@ class LearningTable():
         self._leaf_ports = set()     # provided by net node
         self.rnid_tbl = {}          # flows associated with a remote switch
         self.logger = ryu.logger
+        self.mac_to_peersw = {}
 
     def __contains__(self, key_mac):
         return self.mac_to_port.__contains__(key_mac)
@@ -239,8 +248,10 @@ class LearningTable():
         return str("LearningTable<{}>".format(self.__repr__()))
 
     def __getitem__(self, key_mac):
-        val = self.mac_to_port.get(key_mac, (None, None))
-        return (val[0], val[1]) # (ingress, rnid)
+        psw = self.mac_to_peersw.get(key_mac)
+        if psw and psw.port_no:
+            return psw.port_no
+        return self.mac_to_port.get(key_mac, None)
 
     def __setitem__(self, key_mac, value):
         if isinstance(value, tuple):
@@ -250,9 +261,8 @@ class LearningTable():
 
     def __delitem__(self, key_mac):
         """ Remove the MAC address """
-        self.rnid_tbl[self._nid].remove(key_mac)
-        val = self.mac_to_port.pop(key_mac, (None, None))
-        return val[0]
+        self.mac_to_port.pop(key_mac, None)
+        self.mac_to_peersw.pop(key_mac, None)
 
     @property
     def dpid(self):
@@ -269,13 +279,13 @@ class LearningTable():
     @node_id.setter
     def node_id(self, nid):
         self._nid = nid
-        self.rnid_tbl[nid] = set()
+        self.rnid_tbl[nid] = PeerSwitch()
 
     @property
     def local_leaf_macs(self):
         if not self._nid:
             return None
-        return self.rnid_tbl[self._nid]
+        return self.rnid_tbl[self._nid].leaf_macs
 
     @property
     def leaf_ports(self):
@@ -286,26 +296,32 @@ class LearningTable():
         self._leaf_ports = ports_set
 
     def learn(self, src_mac, in_port, rnid=None):
+        self.mac_to_port[src_mac] = in_port
         if in_port in self.leaf_ports:
-            self.rnid_tbl[self._nid].add(src_mac)
-        self.mac_to_port[src_mac] = (in_port, rnid)
-        # Create RNID Tbl entry
-        if rnid and rnid not in self.rnid_tbl:
-            self.rnid_tbl[rnid] = set()
+            self.rnid_tbl[self._nid].leaf_macs.add(src_mac)
+        elif rnid:
+            if rnid not in self.rnid_tbl:
+                # not an adjacent peer switch
+                self.rnid_tbl[rnid] = PeerSwitch()
+            self.rnid_tbl[rnid].leaf_macs.add(src_mac)
+            if self.rnid_tbl[rnid].port_no:
+                self.mac_to_peersw[src_mac] = self.rnid_tbl[rnid]
 
     def forget(self):
         """ Removes learning table entries associated with port no """
         self.mac_to_port.clear()
 
-    def register_peer_switch(self, peer_id):
-        if peer_id and peer_id not in self.rnid_tbl:
-            self.rnid_tbl[peer_id] = set()
+    def register_peer_switch(self, peer_id, in_port):
+        """ Track the adjacent switch and the port no """
+        if peer_id:
+            if peer_id not in self.rnid_tbl:
+                self.rnid_tbl[peer_id] = PeerSwitch()
+            self.rnid_tbl[peer_id].port_no = in_port
 
-    def track_remote_leaf_macs(self, mac):
-        val = self[mac]     # find the rnid
-        if val[1]:
-            self.rnid_tbl[val[1]].add(mac)
-            self.logger.info("Tracking flow %s<-%s", val[1][:7], mac)
+    def unregister_peer_switch(self, peer_id):
+        """ Clear port_no to indicate the tunnel is removed, ie., switch is no longer adjacent"""
+        if peer_id and peer_id in self.rnid_tbl:
+            self.rnid_tbl[peer_id].port_no = None
 
     def remote_leaf_macs(self, rnid):
         return self.rnid_tbl[rnid]
@@ -386,16 +402,16 @@ class RingRoute(app_manager.RyuApp):
             #if port_no in node.link_ports():
             #    self.add_flow_drop_multicast(dp, port_no)
             self.lt.leaf_ports = node.leaf_ports()
-            self.lt.register_peer_switch(node.peer_id(port_no))
+            self.lt.register_peer_switch(node.peer_id(port_no), port_no)
             self.do_bf_leaf_transfer(dp, msg.desc.port_no)
             #self.create_direct_path_flows(dp, msg.desc)
         elif msg.reason == ofp.OFPPR_DELETE:
             self.logger.info("OFPPortStatus: port DELETED desc=%s", msg.desc)
             self.del_flows_port(dp, port_no)
+            self.lt.unregister_peer_switch(node.peer_id(port_no))
             self.net_node_del_port(dp, msg.desc)
             self.lt.leaf_ports = node.leaf_ports()
             self.lt.forget()
-            #self.del_flow_drop_multicast(dp, port_no)
         elif msg.reason == ofp.OFPPR_MODIFY:
             self.logger.debug("OFPPortStatus: port MODIFIED desc=%s", msg.desc)
 
@@ -435,9 +451,8 @@ class RingRoute(app_manager.RyuApp):
             # learn a mac address
             self.lt[src] = in_port
             out_port = self.lt[dst]
-            # self.lt.track_remote_leaf_macs(dst)
             # create new flow rule
-            actions = [parser.OFPActionOutput(out_port[0])]
+            actions = [parser.OFPActionOutput(out_port)]
             match = parser.OFPMatch(in_port=in_port, eth_dst=dst, eth_src=src)
             self.add_flow(datapath, match, actions, priority=1)
             if msg.buffer_id == ofproto.OFP_NO_BUFFER:
@@ -667,12 +682,14 @@ class RingRoute(app_manager.RyuApp):
     def do_bf_leaf_transfer(self, datapath, tunnel_port_no):
         node = self.nodes[datapath.id]
         tun_item = node.links.get(tunnel_port_no)
-        if not tun_item: return
+        if not tun_item:
+            return
         peer_id = tun_item[2]
         peer_mac = tun_item[1]
         src_mac = tun_item[0]
 
-        if not self.lt.local_leaf_macs: return
+        if not self.lt.local_leaf_macs:
+            return
         payload = bytearray(6*len(self.lt.local_leaf_macs))
         offset = 0
         for leaf_mac in self.lt.local_leaf_macs:
@@ -708,7 +725,8 @@ class RingRoute(app_manager.RyuApp):
         parser = datapath.ofproto_parser
         rcvd_frb = pkt.protocols[1]
         self.logger.info("rcvd_frb=%s", rcvd_frb)
-        if len(pkt.protocols) < 2: return
+        if len(pkt.protocols) < 2:
+            return
         payload = pkt.protocols[2]
         #learn src mac and rnid
         self.lt[src] = (in_port, rcvd_frb.root_nid)

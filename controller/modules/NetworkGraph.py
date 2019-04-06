@@ -58,9 +58,9 @@ class ConnectionEdge():
     _PACK_STR = '!16s16sff18s19s?'
     def __init__(self, peer_id=None, edge_id=None, edge_type="CETypeUnknown"):
         self.peer_id = peer_id
-        self._edge_id = edge_id
-        if not self._edge_id:
-            self._edge_id = uuid.uuid4().hex
+        self.edge_id = edge_id
+        if not self.edge_id:
+            self.edge_id = uuid.uuid4().hex
         self.created_time = time.time()
         self.connected_time = None
         self.edge_state = "CEStateUnknown"
@@ -109,10 +109,6 @@ class ConnectionEdge():
         yield("edge_type", self.edge_type)
         yield("marked_for_delete", self.marked_for_delete)
 
-    @property
-    def edge_id(self):
-        return self._edge_id
-
     def serialize(self):
         return struct.pack(ConnectionEdge._PACK_STR, self.peer_id, self.edge_id, self.created_time,
                            self.connected_time, self.edge_state, self.edge_type,
@@ -121,7 +117,7 @@ class ConnectionEdge():
     @classmethod
     def from_bytes(cls, data):
         ce = cls()
-        (ce.peer_id, ce._edge_id, ce.created_time, ce.connected_time, ce.edge_state,
+        (ce.peer_id, ce.edge_id, ce.created_time, ce.connected_time, ce.edge_state,
          ce.edge_type, ce.marked_for_delete) = struct.unpack_from(cls._PACK_STR, data)
         return ce
 
@@ -138,7 +134,7 @@ class ConnectionEdge():
         ce = cls()
         jce = json.loads(json_str)
         ce.peer_id = jce["peer_id"]
-        ce._edge_id = jce["edge_id"]
+        ce.edge_id = jce["edge_id"]
         ce.created_time = jce["created_time"]
         ce.connected_time = jce["connected_time"]
         ce.edge_state = jce["edge_state"]
@@ -240,6 +236,8 @@ class ConnEdgeAdjacenctList():
     def update_closest(self):
         """ track the closest successor and predecessor """
         if not self.conn_edges:
+            self._successor_nid = self.node_id
+            self._predecessor_nid = self.node_id
             return
         nl = [*self.conn_edges.keys()]
         nl.append(self.node_id)
