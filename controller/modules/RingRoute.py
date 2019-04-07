@@ -754,7 +754,7 @@ class RingRoute(app_manager.RyuApp):
                 self.do_bounded_flood(datapath, in_port, out_bounds, src, payload)
 
     def update_leaf_macs_and_flows(self, datapath, rnid, macs, num_items, ingress):
-        self.lt.rnid_tbl[rnid].clear()
+        self.lt.rnid_tbl[rnid].leaf_macs.clear()
         mlen = num_items*6
         for mactup in struct.iter_unpack("!6s", macs[:mlen]):
             macstr = mac_lib.haddr_to_str(mactup[0])
