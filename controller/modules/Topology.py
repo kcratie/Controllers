@@ -101,7 +101,7 @@ class Topology(ControllerModule, CFX):
         peer_id = params["PeerId"]
         if not cbt.response.status:
             self.register_cbt("Logger", "LOG_WARNING", "Failed to create topology edge to {0}. {1}"
-                                .format(cbt.request.params["PeerId"], cbt.response.data))
+                              .format(cbt.request.params["PeerId"], cbt.response.data))
             self._net_ovls[olid]["KnownPeers"][peer_id].exclude()
         self.free_cbt(cbt)
 
@@ -133,12 +133,12 @@ class Topology(ControllerModule, CFX):
             self._net_ovls[olid]["NewPeerCount"] += 1
             if self._net_ovls[olid]["NewPeerCount"] >= self.config["PeerDiscoveryCoalesce"]:
                 self.register_cbt("Logger", "LOG_DEBUG", "Coalesced {0} new peer discovery, "
-                                    "initiating network refresh"
-                                    .format(self._net_ovls[olid]["NewPeerCount"]))
+                                  "initiating network refresh"
+                                  .format(self._net_ovls[olid]["NewPeerCount"]))
                 self._update_overlay(olid)
             else:
                 self.register_cbt("Logger", "LOG_DEBUG", "{0} new peers discovered, delaying "
-                                    "refresh".format(self._net_ovls[olid]["NewPeerCount"]))
+                                  "refresh".format(self._net_ovls[olid]["NewPeerCount"]))
         cbt.set_response(None, True)
         self.complete_cbt(cbt)
 
@@ -167,10 +167,10 @@ class Topology(ControllerModule, CFX):
                     for k in adjl.conn_edges:
                         ce = adjl.conn_edges[k]
                         ced = {"PeerId": ce.peer_id, "EdgeId": ce.edge_id,
-                                "MarkedForDeleted": ce.marked_for_delete,
-                                "CreatedTime": ce.created_time,
-                                "ConnectedTime": ce.connected_time,
-                                "State": ce.edge_state, "Type": ce.edge_type}
+                               "MarkedForDeleted": ce.marked_for_delete,
+                               "CreatedTime": ce.created_time,
+                               "ConnectedTime": ce.connected_time,
+                               "State": ce.edge_state, "Type": ce.edge_type}
                         edges[ce.edge_id] = ced
                     topo_data[olid] = edges
             cbt.set_response({"Topology": topo_data}, bool(topo_data))
@@ -186,11 +186,10 @@ class Topology(ControllerModule, CFX):
         olid = params["OverlayId"]
         peer_id = params["PeerId"]
         self._net_ovls[olid]["NetBuilder"].update_edge_state(params)
-        if params["UpdateType"] == "DISCONNECTED":
+        if params["UpdateType"] == "DISCONNECTED" or params["UpdateType"] == "DEAUTHORIZED":
             self._net_ovls[olid]["KnownPeers"][peer_id].exclude()
             self.top_log("Excluding peer {0} until {1}".
-                            format(peer_id,
-                                self._net_ovls[olid]["KnownPeers"][peer_id].removal_time))
+                         format(peer_id, self._net_ovls[olid]["KnownPeers"][peer_id].removal_time))
         if params["UpdateType"] == "REMOVED":
             self._do_topo_change_post(olid)
         elif params["UpdateType"] == "CONNECTED":
@@ -213,7 +212,7 @@ class Topology(ControllerModule, CFX):
             self._net_ovls[olid]["OndPeers"].append(op)
         else:
             self.register_cbt("Logger", "LOG_WARNING", "Invalid on demand tunnel request "
-                                "parameter, OverlayId={0}, PeerId={1}".format(olid, peer_id))
+                              "parameter, OverlayId={0}, PeerId={1}".format(olid, peer_id))
 
     def req_handler_negotiate_edge(self, edge_cbt):
         """ Role B, decide if the request for an incoming edge is accepted or rejected """
@@ -231,7 +230,7 @@ class Topology(ControllerModule, CFX):
             self._net_ovls[olid]["KnownPeers"][peer_id] = DiscoveredPeer(peer_id)
         if self.config["Overlays"][olid].get("Role", "Switch").casefold() == "leaf".casefold():
             self.register_cbt("Logger", "LOG_INFO", "Rejected edge negotiation as config "
-                                "specifies leaf device")
+                              "specifies leaf device")
             edge_cbt.set_response("E6 - Not accepting incoming connections, leaf device", False)
             self.complete_cbt(edge_cbt)
             return
@@ -385,7 +384,8 @@ class Topology(ControllerModule, CFX):
             manual_topo = ovl_cfg.get("ManualTopology", False)
             peer_list = [peer_id for peer_id in net_ovl["KnownPeers"] \
                 if not net_ovl["KnownPeers"][peer_id].is_excluded]
-            self.register_cbt("Logger", "LOG_DEBUG", "Peerlist for Netbuilder {0}".format(peer_list))
+            self.register_cbt("Logger", "LOG_DEBUG", "Peerlist for Netbuilder {0}"
+                              .format(peer_list))
 
             max_succ = int(ovl_cfg.get("MaxSuccessors", 1))
             max_ond = int(ovl_cfg.get("MaxOnDemandEdges", 2))

@@ -284,12 +284,8 @@ def getchecksum(hexstr):
     return hex(65535 ^ int(result, 16))
 
 def runshell(cmd):
-    """ Run a shell command. if fails, raise an exception. """
-    p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if p.returncode != 0:
-        err = "Subprocess: \"{0}\" failed, std err = {1}".format(str(cmd), str(p.stderr))
-        raise RuntimeError(err)
-    return p
+    """ Run a shell command """
+    return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
 class RemoteAction():
     def __init__(self, overlay_id, recipient_id, recipient_cm, action, params,

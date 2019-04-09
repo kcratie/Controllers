@@ -27,8 +27,9 @@ except ImportError:
     import json
 from threading import Thread
 import traceback
-from controller.framework.ControllerModule import ControllerModule
+from distutils import spawn
 import controller.framework.ipoplib as ipoplib
+from controller.framework.ControllerModule import ControllerModule
 
 
 class TincanInterface(ControllerModule):
@@ -46,6 +47,7 @@ class TincanInterface(ControllerModule):
         self._dest = (self._cm_config["SndServiceAddress"], self._cm_config["CtrlSendPort"])
         self._sock.bind(("", 0))
         self._sock_list = [self._sock_svr]
+        self.iptool = spawn.find_executable("ip")
 
     def initialize(self):
         self._tincan_listener_thread = Thread(target=self.__tincan_listener)
@@ -199,6 +201,8 @@ class TincanInterface(ControllerModule):
         req["OverlayId"] = msg["OverlayId"]
         req["TunnelId"] = msg["TunnelId"]
         self.send_control(json.dumps(ctl))
+        if msg["TapName"]:
+            ipoplib.runshell([self.iptool, "link", "del", "dev", msg["TapName"]])
 
     def req_handler_remove_link(self, cbt):
         msg = cbt.request.params

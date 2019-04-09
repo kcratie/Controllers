@@ -134,6 +134,11 @@ class NetworkBuilder():
             self._current_adj_list[peer_id].edge_state = "CEStateDisconnected"
             self._refresh_in_progress += 1
             self._top.top_remove_edge(overlay_id, peer_id)
+        elif connection_event["UpdateType"] == "DEAUTHORIZED":
+            ce = self._current_adj_list[peer_id]
+            assert ce.edge_state == "CEStateUnknown", "Deauth CE={0}".format(ce)
+            del self._current_adj_list[peer_id]
+            self._refresh_in_progress -= 1
         else:
             self._top.top_log("Invalid UpdateType specified for connection update",
                               level="LOG_WARNING")

@@ -27,6 +27,7 @@ try:
     import simplejson as json
 except ImportError:
     import json
+import random
 import sleekxmpp
 from sleekxmpp.xmlstream.stanzabase import ElementBase, JID
 from sleekxmpp.xmlstream import register_stanza_plugin
@@ -285,7 +286,8 @@ class Signal(ControllerModule):
         for overlay_id in self.overlays:
             overlay_descr = self.overlays[overlay_id]
             self._circles[overlay_id] = {}
-            self._circles[overlay_id]["PresenceTimer"] = time.time()
+            self._circles[overlay_id]["Announce"] = time.time() + \
+                (int(self.config["PresenceInterval"]) * random.randint(1, 3))
             self._circles[overlay_id]["JidCache"] = \
                 JidCache(self, self._cm_config["CacheExpiry"])
             self._circles[overlay_id]["OutgoingRemoteActs"] = {}
@@ -425,10 +427,12 @@ class Signal(ControllerModule):
     def timer_method(self):
         with self._lock:
             for overlay_id in self._circles:
-                pt = self._circles[overlay_id]["PresenceTimer"]
-                if time.time() - pt >= int(self.config["PresenceInterval"]):
+                anc = self._circles[overlay_id]["Announce"]
+                if time.time() >= anc:
                     self._circles[overlay_id]["Transport"].send_presence(pstatus="ident#" +
                                                                          self.node_id)
+                    self._circles[overlay_id]["Announce"] = time.time() + \
+                        (int(self.config["PresenceInterval"]) * random.randint(2, 20))
                 self._circles[overlay_id]["JidCache"].scavenge()
                 self.scavenge_expired_outgoing_rem_acts(self._circles[overlay_id]
                                                         ["OutgoingRemoteActs"])

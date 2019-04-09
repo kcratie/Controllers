@@ -66,7 +66,7 @@ CONFIG = {
         "TimerInterval": 30,
         "CacheExpiry": 30,          # Min duration an entry remains in the JID cache in seconds
         "Dependencies": ["Logger"],
-        "PresenceInterval": 60     # seconds between presence broadcast
+        "PresenceInterval": 30     # seconds between presence broadcast
     },
     "LinkManager": {
         "Enabled": True,
