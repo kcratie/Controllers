@@ -44,12 +44,13 @@ class SDNIRequestHandler(socketserver.BaseRequestHandler):
                                     Data=dict(NodeId=str(self.server.sdni.sdn_get_node_id())))
         elif task["Request"]["Action"] == "TunnelRquest":
             task["Response"] = dict(Status=True,
-                                    Data="Request shall be considered")
-            self.server.sdni.sdn_tunnel_request(task["Request"]) # op is ADD/REMOVE
+                                    Data=dict(StatusMsg="Request shall be considered"))
+            self.server.sdni.sdn_log("On demand request recvd {}".format(task["Request"]))
+            self.server.sdni.sdn_tunnel_request(task["Request"]["Params"]) # op is ADD/REMOVE
         else:
             self.server.sdni.sdn_log("An unrecognized SDNI task request was discarded {0}".
                                      format(task), "LOG_WARNING")
-            task["Response"] = dict(Status=False, Data="Unsupported request")
+            task["Response"] = dict(Status=False, Data=dict(ErrorMsg="Unsupported request"))
         self.request.sendall(bytes(json.dumps(task) + "\n", "utf-8"))
 
     def _handle_get_topo(self, task):
@@ -169,5 +170,5 @@ class SDNInterface(ControllerModule):
         self._lock.release()
         return topo
 
-    def sdn_tunnel_request(self, **req_params):
+    def sdn_tunnel_request(self, req_params):
         self.register_cbt("Topology", "TOP_REQUEST_OND_TUNNEL", req_params)

@@ -204,12 +204,13 @@ class Topology(ControllerModule, CFX):
         Add the request params for creating an on demand tunnel
         overlay_id, peer_id, ADD/REMOVE op string
         """
-        olid = cbt.request.params["OverlayId"]
-        peer_id = cbt.request.params["PeerId"]
         op = cbt.request.params
+        olid = op["OverlayId"]
+        peer_id = op["PeerId"]
         if (olid in self._net_ovls and peer_id in self._net_ovls[olid]["KnownPeers"] and
                 not self._net_ovls[olid]["KnownPeers"][peer_id].is_excluded):
             self._net_ovls[olid]["OndPeers"].append(op)
+            self.register_cbt("Logger", "LOG_INFO", "Added on demand request to queue {0}".format(op))
         else:
             self.register_cbt("Logger", "LOG_WARNING", "Invalid on demand tunnel request "
                               "parameter, OverlayId={0}, PeerId={1}".format(olid, peer_id))
@@ -396,7 +397,7 @@ class Topology(ControllerModule, CFX):
                       "EnforcedEdges": enf_lnks, "MaxSuccessors": max_succ,
                       "MaxLongDistEdges": max_ldl, "MaxOnDemandEdges": max_ond,
                       "ManualTopology": manual_topo}
-            gb = GraphBuilder(params)
+            gb = GraphBuilder(params, top=self)
             adjl = gb.build_adj_list(nb.get_adj_list(), net_ovl["OndPeers"])
             nb.refresh(adjl)
         else:

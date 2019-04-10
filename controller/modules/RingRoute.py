@@ -63,7 +63,7 @@ class netNode():
         self.counters = {}
         self.ryu = ryu_app
         self.logger = ryu_app.logger
-        self.traffic_analyzer = TrafficAnalyzer(self.mac_local_to_peer, datapath.id)
+        self.traffic_analyzer = TrafficAnalyzer(self.logger)
         self.update_node_id()
 
     def __repr__(self):
@@ -185,6 +185,7 @@ class netNode():
 
     def ond_tunnel(self, flow_metrics, learning_table):
         tunnel_ops = self.traffic_analyzer.ond_recc(flow_metrics, learning_table)
+        self.logger.info("On demand tunnel operations %s", tunnel_ops)
         for op in tunnel_ops:
             if op[1] == "ADD":
                 self.req_add_tunnel(op[0])
@@ -242,14 +243,16 @@ class LearningTable():
         return self.mac_to_port.__contains__(key_mac)
 
     def __repr__(self):
-        state = "dpid={0}, nid={1}, mac_to_port={2}, leaf_ports={3}, rnid_tbl={4}"\
-                .format(self._dpid, self._nid, self.mac_to_port, self.leaf_ports, self.rnid_tbl)
+        state = "dpid={0}, nid={1}, mac_to_port={2}, leaf_ports={3}, rnid_tbl={4}, mac_to_psw={5}"\
+                .format(self._dpid, self._nid, self.mac_to_port, self.leaf_ports, self.rnid_tbl,
+                        self.mac_to_peersw)
         return state
 
     def __str__(self):
         return str("LearningTable<{}>".format(self.__repr__()))
 
     def __getitem__(self, key_mac):
+        """ return the best outgress to reach the given mac """
         psw = self.mac_to_peersw.get(key_mac)
         if psw and psw.port_no:
             return psw.port_no
@@ -298,16 +301,18 @@ class LearningTable():
         self._leaf_ports = ports_set
 
     def learn(self, src_mac, in_port, rnid=None):
+        """
+        Associate the mac with the port. If the RNID is provided it indicates the peer switch that
+        hosts the leaf mac.
+        """
         self.mac_to_port[src_mac] = in_port
         if in_port in self.leaf_ports:
             self.rnid_tbl[self._nid].leaf_macs.add(src_mac)
         elif rnid:
             if rnid not in self.rnid_tbl:
-                # not an adjacent peer switch
                 self.rnid_tbl[rnid] = PeerSwitch(rnid)
             self.rnid_tbl[rnid].leaf_macs.add(src_mac)
-            if self.rnid_tbl[rnid].port_no:
-                self.mac_to_peersw[src_mac] = self.rnid_tbl[rnid]
+            self.mac_to_peersw[src_mac] = self.rnid_tbl[rnid]
 
     def leaf_to_peersw(self, leaf_mac):
         return self.mac_to_peersw.get(leaf_mac)
@@ -472,33 +477,30 @@ class RingRoute(app_manager.RyuApp):
         flows = []
         for stat in ev.msg.body:
             flows.append('table_id=%s '
-                            'duration_sec=%d duration_nsec=%d '
-                            'priority=%d '
-                            'idle_timeout=%d hard_timeout=%d flags=0x%04x '
-                            'importance=%d cookie=%d packet_count=%d '
-                            'byte_count=%d match=%s instructions=%s' %
-                            (stat.table_id,
-                            stat.duration_sec, stat.duration_nsec,
-                            stat.priority,
-                            stat.idle_timeout, stat.hard_timeout,
-                            stat.flags, stat.importance,
-                            stat.cookie, stat.packet_count, stat.byte_count,
-                            stat.match, stat.instructions))
+                         'duration_sec=%d duration_nsec=%d '
+                         'priority=%d '
+                         'idle_timeout=%d hard_timeout=%d flags=0x%04x '
+                         'importance=%d cookie=%d packet_count=%d '
+                         'byte_count=%d match=%s instructions=%s' %
+                         (stat.table_id, stat.duration_sec, stat.duration_nsec, stat.priority,
+                          stat.idle_timeout, stat.hard_timeout, stat.flags, stat.importance,
+                          stat.cookie, stat.packet_count, stat.byte_count, stat.match,
+                          stat.instructions))
         self.logger.info('FlowStats: %s', flows)
         self.nodes[ev.msg.datapath.id].ond_tunnel(ev.msg.body, self.lt)
 
     ###################################################################################
     def _monitor(self):
         while True:
-            #msg = str(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>\n")
+            msg = str(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>\n")
             for dpid in self.nodes:
                 self.request_stats(self.nodes[dpid].datapath)
-            #    msg += "{0}\n".format(self.nodes[dpid])
-            #    msg += "{0}\n".format(str(self.lt))
-            #    msg += "Max Flooding Hop Count {0}\n".\
-            #        format(self.nodes[dpid].counters.get("MaxFloodingHopCount", 1))
-            #msg += str("<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<")
-            #self.logger.info(msg)
+                msg += "{0}\n".format(self.nodes[dpid])
+                msg += "{0}\n".format(str(self.lt))
+                msg += "Max Flooding Hop Count {0}\n".\
+                    format(self.nodes[dpid].counters.get("MaxFloodingHopCount", 1))
+            msg += str("<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<")
+            self.logger.info(msg)
             hub.sleep(30)
 
     def request_stats(self, datapath, tblid=0):
@@ -716,7 +718,7 @@ class RingRoute(app_manager.RyuApp):
         mlen = num_items*6
         for mactup in struct.iter_unpack("!6s", macs[:mlen]):
             macstr = mac_lib.haddr_to_str(mactup[0])
-            self.lt.rnid_tbl[rnid].add(macstr)
+            self.lt.rnid_tbl[rnid].leaf_macs.add(macstr)
             self.logger.info("Added leaf mac %s to rnid %s", macstr, rnid)
         for mac in self.lt.remote_leaf_macs(rnid):
             self.update_flow_match_dstmac(datapath, mac, ingress, tblid=0)
@@ -945,12 +947,12 @@ class FloodingBounds():
 class TrafficAnalyzer():
     """ A very simple traffic analyzer to trigger an on demand tunnel """
     _DEMAND_THRESHOLD = (1<<20)
-    def __init__(self, mac_to_peer_id, dpid, demand_threshold=None):
-        self._mac_to_peer_id = mac_to_peer_id
-        self._dpid = dpid
+    def __init__(self, logger, demand_threshold=None):
         self.demand_threshold = demand_threshold if demand_threshold else \
             TrafficAnalyzer._DEMAND_THRESHOLD
         self.ond = set()
+        self.logger = logger
+        logger.info("Demand threshold set to %d", self.demand_threshold)
 
     def ond_recc(self, flow_metrics, learning_table):
         tunnel_reqs = []
@@ -960,12 +962,14 @@ class TrafficAnalyzer():
             src_mac = stat.match["eth_src"]
             psw = learning_table.leaf_to_peersw(src_mac)
             if not psw:
+                self.logger.info("TrafficAnalyzer: no peer switch for mac %s", src_mac)
                 continue
             assert bool(psw.rnid)
             if stat.byte_count > self.demand_threshold and psw.rnid not in self.ond:
                 tunnel_reqs.append((psw.rnid, "ADD"))
                 self.ond.add(psw.rnid)
-            elif stat.byte_count < self.demand_threshold and psw.rnid in self.ond:
-                tunnel_reqs.append((psw.rnid, "REMOVE"))
-                self.ond.discard(psw.rnid)
+                self.logger.info("ADD demand tunnel for %s", psw.rnid)
+            #elif stat.byte_count < self.demand_threshold and psw.rnid in self.ond:
+            #    tunnel_reqs.append((psw.rnid, "REMOVE"))
+            #    self.ond.discard(psw.rnid)
         return tunnel_reqs

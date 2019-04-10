@@ -29,7 +29,7 @@ class GraphBuilder():
     Creates the adjacency list of connections edges from this node that are necessary to
     maintain the Topology
     """
-    def __init__(self, cfg, current_adj_list=None):
+    def __init__(self, cfg, current_adj_list=None, top=None):
         self.overlay_id = cfg["OverlayId"]
         self._node_id = cfg["NodeId"]
         self._peers = sorted(cfg.get("Peers", []))
@@ -43,6 +43,7 @@ class GraphBuilder():
         self._max_ond = int(cfg["MaxOnDemandEdges"])
         # Currently active adjacency list, needed to minimize changes in chord selection
         self._curr_adj_lst = current_adj_list
+        self._top = top
 
     def _build_enforced(self, adj_list):
         for peer_id in self._enforced:
@@ -130,18 +131,21 @@ class GraphBuilder():
                 ond[peer_id] = ConnectionEdge(peer_id, ce.edge_id, ce.edge_type)
 
         for task in request_list:
+            self._top.top_log("GB req list {}".format(request_list))
             peer_id = task["PeerId"]
             op = task["Operation"]
             if op == "ADD":
                 if peer_id in self._peers and (peer_id not in adj_list or
                                                peer_id not in transition_adj_list):
                     ce = ConnectionEdge(peer_id, edge_type="CETypeOnDemand")
-                    ond[peer_id](ce)
+                    ond[peer_id] = ce
+                    self._top.top_log("GB created CE {}".format(ce))
             elif op == "REMOVE":
                 ond.pop(peer_id, None)
         for peer_id in ond:
             if peer_id not in adj_list:
                 adj_list[peer_id] = ond[peer_id]
+                self._top.top_log("GB added CE {}".format(ce))
         request_list.clear()
 
     def build_adj_list(self, transition_adj_list, request_list=None):
