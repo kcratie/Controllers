@@ -155,8 +155,7 @@ class GraphBuilder():
         if not self._manual_topo:
             self._build_successors(adj_list)
             self._build_long_dist_links(adj_list, transition_adj_list)
-            if request_list:
-                self._build_ondemand_links(adj_list, transition_adj_list, request_list)
+            self._build_ondemand_links(adj_list, transition_adj_list, request_list)
         for _, ce in adj_list.conn_edges.items():
             assert ce.edge_state == "CEStateUnknown", "Invalid CE edge state, CE={}".format(ce)
         return adj_list

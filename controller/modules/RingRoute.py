@@ -358,6 +358,7 @@ class RingRoute(app_manager.RyuApp):
         self.lt = LearningTable(self)   # The local nodes learning table
         self.nodes = dict()             # net node instance for datapath
         self.flooding_bounds = dict()   # flooding bounds isntance for datapath
+        self.idle_timeout = 30
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def switch_features_handler(self, ev):
@@ -452,7 +453,7 @@ class RingRoute(app_manager.RyuApp):
             # create new flow rule
             actions = [parser.OFPActionOutput(out_port)]
             match = parser.OFPMatch(in_port=in_port, eth_dst=dst, eth_src=src)
-            self.add_flow(datapath, match, actions, priority=1, tblid=0)
+            self.add_flow(datapath, match, actions, priority=1, tblid=0, idle=self.idle_timeout)
             if msg.buffer_id == ofproto.OFP_NO_BUFFER:
                 data = msg.data
             out = parser.OFPPacketOut(datapath=datapath, buffer_id=msg.buffer_id,
@@ -510,12 +511,12 @@ class RingRoute(app_manager.RyuApp):
         req = parser.OFPFlowStatsRequest(datapath, table_id=tblid)
         datapath.send_msg(req)
 
-    def add_flow(self, datapath, match, actions, priority=0, tblid=0):
+    def add_flow(self, datapath, match, actions, priority=0, tblid=0, idle=0):
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
         inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
-        mod = parser.OFPFlowMod(datapath=datapath, priority=priority,
-                                match=match, instructions=inst, table_id=tblid)
+        mod = parser.OFPFlowMod(datapath=datapath, priority=priority, table_id=tblid,
+                                idle_timeout=idle, match=match, instructions=inst)
         resp = datapath.send_msg(mod)
         if not resp:
             self.logger.info("Add flow failed match=%s, action=%s", match, actions)
@@ -720,7 +721,7 @@ class RingRoute(app_manager.RyuApp):
             macstr = mac_lib.haddr_to_str(mactup[0])
             self.lt.rnid_tbl[rnid].leaf_macs.add(macstr)
             self.logger.info("Added leaf mac %s to rnid %s", macstr, rnid)
-        for mac in self.lt.remote_leaf_macs(rnid):
+        for mac in self.lt.remote_leaf_macs(rnid).leaf_macs:
             self.update_flow_match_dstmac(datapath, mac, ingress, tblid=0)
 
     #def create_direct_path_flows(self, datapath, new_ofpport):
