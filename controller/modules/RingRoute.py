@@ -793,12 +793,11 @@ class FloodingBounds():
             # the prev_frb contained a bound to a wrap aound nNID which is smaller than ours.
             if peer2 is None:
                 return FloodRouteBound(root_nid, bound_nid, hops)
-            else:
-                bound_nid = peer2
-                return FloodRouteBound(root_nid, bound_nid, hops)
-        elif (bound_nid > self._net_node.node_id) and (peer1 >= bound_nid):
+            bound_nid = peer2
+            return FloodRouteBound(root_nid, bound_nid, hops)
+        if (bound_nid > self._net_node.node_id) and (peer1 >= bound_nid):
             return None # the peer being considered is beyond the bound
-        elif not peer2:
+        if not peer2:
             bound_nid = prev_frb.bound_nid # alread set in default, handling no peer2
         elif peer2 < bound_nid:
             # the bound NID is the lesser of the bounds, ie., the bound_nid in the received frb,
