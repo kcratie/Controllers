@@ -91,7 +91,6 @@ class NetworkBuilder():
             self._current_adj_list.update_closest()
             self._mark_edges_for_removal()
         self._process_pending_adj_list()
-        return
 
     def update_edge_state(self, connection_event):
         """
@@ -255,7 +254,8 @@ class NetworkBuilder():
             ce.edge_id = edge_req.edge_id
             edge_resp = EdgeResponse(is_accepted=True, data=msg)
             self._top.top_log(msg)
-            self._top.top_log("Existing CE={0} moved to negotiated_edges={1}".format(ce, self._negotiated_edges))
+            self._top.top_log("Existing CE={0} moved to negotiated_edges={1}".format(ce,
+                              self._negotiated_edges))
         else:
             edge_resp = EdgeResponse(False, "E6 - Request colides with an edge being destroyed."\
                                             "Try later")
@@ -267,7 +267,6 @@ class NetworkBuilder():
         self._top.top_log("Rcvd EdgeRequest={0}".format(edge_req))
         edge_resp = None
         peer_id = edge_req.initiator_id
-        #with self._lock:
         if peer_id in self._current_adj_list:
             edge_resp = self._resolve_request_collision(edge_req)
         elif len(self._current_adj_list) > math.floor(1.5*self._current_adj_list.degree_threshold):
@@ -284,12 +283,12 @@ class NetworkBuilder():
             et = ng.transpose_edge_type(edge_req.edge_type)
             ce = ConnectionEdge(peer_id=peer_id, edge_id=edge_req.edge_id, edge_type=et)
             self._negotiated_edges[peer_id] = ce
-            self._top.top_log("New CE={0} added to negotiated_edges={1}".format(ce, self._negotiated_edges))
+            self._top.top_log("New CE={0} added to negotiated_edges={1}".
+                              format(ce, self._negotiated_edges))
         return edge_resp
 
     def add_incoming_auth_conn_edge(self, peer_id):
         """ Role B2 """
-        #with self._lock:
         self._refresh_in_progress += 1
         ce = self._negotiated_edges.pop(peer_id)
         self._current_adj_list.add_connection_edge(ce)

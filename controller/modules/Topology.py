@@ -326,7 +326,7 @@ class Topology(ControllerModule, CFX):
     def timer_method(self):
         with self._lock:
             self._manage_topology()
-            self.register_cbt("Logger", "LOG_DEBUG", "Timer TOP State=" + str(self))
+            self.log("LOG_DEBUG", "Timer TOP State=%s", str(self))
 
     def top_add_edge(self, overlay_id, peer_id, edge_id):
         """
@@ -343,8 +343,8 @@ class Topology(ControllerModule, CFX):
         params = {"OverlayId": overlay_id, "PeerId": peer_id}
         self.register_cbt("LinkManager", "LNK_REMOVE_TUNNEL", params)
 
-    def top_log(self, msg, level="LOG_DEBUG"):
-        self.register_cbt("Logger", level, msg)
+    def top_log(self, *msg, level="LOG_DEBUG"):
+        self.log(level, *msg)
 
     def top_send_negotiate_edge_req(self, edge_req):
         """Role Node A, Send a request to create an edge to the peer """
@@ -390,15 +390,13 @@ class Topology(ControllerModule, CFX):
 
             max_succ = int(ovl_cfg.get("MaxSuccessors", 1))
             max_ond = int(ovl_cfg.get("MaxOnDemandEdges", 2))
-            max_ldl = int(ovl_cfg.get("MaxLongDistEdges", math.floor(math.log(len(peer_list), 2))))
-            if max_ldl < 1:
-                max_ldl = 1
-            params = {"OverlayId": olid, "NodeId": self.node_id, "Peers": peer_list,
+            num_peers = len(peer_list) if len(peer_list) > 1 else 2
+            max_ldl = int(ovl_cfg.get("MaxLongDistEdges", math.floor(math.log(num_peers, 2))))
+            params = {"OverlayId": olid, "NodeId": self.node_id, "ManualTopology": manual_topo,
                       "EnforcedEdges": enf_lnks, "MaxSuccessors": max_succ,
-                      "MaxLongDistEdges": max_ldl, "MaxOnDemandEdges": max_ond,
-                      "ManualTopology": manual_topo}
+                      "MaxLongDistEdges": max_ldl, "MaxOnDemandEdges": max_ond}
             gb = GraphBuilder(params, top=self)
-            adjl = gb.build_adj_list(nb.get_adj_list(), net_ovl["OndPeers"])
+            adjl = gb.build_adj_list(peer_list, nb.get_adj_list(), net_ovl["OndPeers"])
             nb.refresh(adjl)
         else:
             self.register_cbt("Logger", "LOG_DEBUG", "TOP resuming Netbuilder refresh...")

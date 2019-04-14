@@ -224,31 +224,31 @@ class LinuxBridge(BridgeABC):
 class BridgeController(ControllerModule):
     def __init__(self, cfx_handle, module_config, module_name):
         super(BridgeController, self).__init__(cfx_handle, module_config, module_name)
-        self._overlays = dict()
+        self._ovl_net = dict()
         self._guest = dict()
         self._lock = threading.Lock()
 
     def initialize(self):
         ign_br_names = dict()
-        for olid in self._cm_config["Overlays"]:
-            br_cfg = self._cm_config["Overlays"][olid]
+        for olid in self.overlays:
+            br_cfg = self.overlays[olid]
 
-            if self._cm_config["Overlays"][olid]["Type"] == LinuxBridge.bridge_type:
-                self._overlays[olid] = LinuxBridge(br_cfg["BridgeName"][:8] + olid[:7],
-                                                   br_cfg["IP4"],
-                                                   br_cfg["PrefixLen"],
-                                                   br_cfg.get("MTU", 1410), self,
-                                                   br_cfg.get("STP", True))
+            if self.overlays[olid]["Type"] == LinuxBridge.bridge_type:
+                self._ovl_net[olid] = LinuxBridge(br_cfg["BridgeName"][:8] + olid[:7],
+                                                  br_cfg["IP4"],
+                                                  br_cfg["PrefixLen"],
+                                                  br_cfg.get("MTU", 1410), self,
+                                                  br_cfg.get("STP", True))
 
-            elif self._cm_config["Overlays"][olid]["Type"] == OvsBridge.bridge_type:
-                self._overlays[olid] = OvsBridge(br_cfg["BridgeName"][:8] + olid[:7],
-                                                 None,
-                                                 None,
-                                                 br_cfg.get("MTU", 1410), self,
-                                                 br_cfg.get("STP", True),
-                                                 sdn_ctrl_cfg=br_cfg.get("SDNController", {}))
+            elif self.overlays[olid]["Type"] == OvsBridge.bridge_type:
+                self._ovl_net[olid] = OvsBridge(br_cfg["BridgeName"][:8] + olid[:7],
+                                                None,
+                                                None,
+                                                br_cfg.get("MTU", 1410), self,
+                                                br_cfg.get("STP", True),
+                                                sdn_ctrl_cfg=br_cfg.get("SDNController", {}))
                 ign_br_names[olid] = set()
-                ign_br_names[olid].add(self._overlays[olid].name)
+                ign_br_names[olid].add(self._ovl_net[olid].name)
                 name = self._create_guest_bridge(olid, br_cfg)
                 ign_br_names[olid].add(name)
 
@@ -275,7 +275,7 @@ class BridgeController(ControllerModule):
     def req_handler_manage_bridge(self, cbt):
         try:
             olid = cbt.request.params["OverlayId"]
-            br = self._overlays[olid]
+            br = self._ovl_net[olid]
             if cbt.request.params["UpdateType"] == "CONNECTED":
                 port_name = cbt.request.params["TapName"]
                 br.add_port(port_name)
@@ -324,11 +324,11 @@ class BridgeController(ControllerModule):
 
     def terminate(self):
         try:
-            for olid in self._overlays:
+            for olid in self._ovl_net:
                 self._guest[olid].del_br()
-                br = self._overlays[olid]
+                br = self._ovl_net[olid]
 
-                if self._cm_config["Overlays"][olid].get("AutoDelete", False):
+                if self.overlays[olid].get("AutoDelete", False):
                     br.del_br()
                 else:
                     if br.bridge_type == OvsBridge.bridge_type:
@@ -340,19 +340,18 @@ class BridgeController(ControllerModule):
     def req_handler_vis_data(self, cbt):
         br_data = dict()
         is_data_available = False
-        for olid in self._cm_config["Overlays"]:
+        for olid in self.overlays:
             is_data_available = True
             br_data[olid] = {}
-            br_data[olid]["Type"] = self._cm_config["Overlays"][olid]["Type"]
-            br_data[olid]["BridgeName"] = self._cm_config["Overlays"][olid]["BridgeName"]
-            if "IP4" in self._cm_config["Overlays"][olid]:
-                br_data[olid]["IP4"] = self._cm_config["Overlays"][olid]["IP4"]
-            if "PrefixLen" in self._cm_config["Overlays"][olid]:
-                br_data[olid]["PrefixLen"] = self._cm_config["Overlays"][olid]["PrefixLen"]
-            if "MTU" in self._cm_config["Overlays"][olid]:
-                br_data[olid]["MTU"] = self._cm_config["Overlays"][olid]["MTU"]
-            br_data[olid]["AutoDelete"] = self._cm_config["Overlays"][olid].get("AutoDelete",
-                                                                                False)
+            br_data[olid]["Type"] = self.overlays[olid]["Type"]
+            br_data[olid]["BridgeName"] = self.overlays[olid]["BridgeName"]
+            if "IP4" in self.overlays[olid]:
+                br_data[olid]["IP4"] = self.overlays[olid]["IP4"]
+            if "PrefixLen" in self.overlays[olid]:
+                br_data[olid]["PrefixLen"] = self.overlays[olid]["PrefixLen"]
+            if "MTU" in self.overlays[olid]:
+                br_data[olid]["MTU"] = self.overlays[olid]["MTU"]
+            br_data[olid]["AutoDelete"] = self.overlays[olid].get("AutoDelete", False)
         cbt.set_response({"BridgeController": br_data}, is_data_available)
         self.complete_cbt(cbt)
 
@@ -366,6 +365,6 @@ class BridgeController(ControllerModule):
                         sdn_ctrl_cfg=dict())
 
         self._guest[olid] = gbr
-        gbr.add_patch_port(self._overlays[olid].get_patch_port_name())
-        self._overlays[olid].add_patch_port(gbr.get_patch_port_name())
+        gbr.add_patch_port(self._ovl_net[olid].get_patch_port_name())
+        self._ovl_net[olid].add_patch_port(gbr.get_patch_port_name())
         return name

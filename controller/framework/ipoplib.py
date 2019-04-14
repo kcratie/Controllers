@@ -20,9 +20,7 @@
 # THE SOFTWARE.
 
 import subprocess
-import sys
 
-py_ver = sys.version_info[0]
 
 CTL_CREATE_CTRL_LINK = {
     "IPOP": {
@@ -99,19 +97,6 @@ CTL_CREATE_LINK = {
                 "MAC": "",
                 "FPR": ""
             }
-        }
-    }
-}
-CTL_SEND_ICC = {
-    "IPOP": {
-        "ProtocolVersion": 5,
-        "Tag": 0,
-        "ControlType": "TincanRequest",
-        "Request": {
-            "Command": "SendIcc",
-            "LinkId": "",
-            "OverlayId": "",
-            "Data": "encoded string"
         }
     }
 }

@@ -56,7 +56,7 @@ class TincanInterface(ControllerModule):
         self.create_control_link()
         self._tci_publisher = self._cfx_handle.publish_subscription("TCI_TINCAN_MSG_NOTIFY")
         self.register_cbt("Logger", "LOG_QUERY_CONFIG")
-        self.register_cbt("Logger", "LOG_INFO", "Module loaded")
+        self.log("LOG_INFO", "Module loaded")
 
     def __tincan_listener(self):
         try:
@@ -214,16 +214,6 @@ class TincanInterface(ControllerModule):
         req["LinkId"] = msg["LinkId"]
         self.send_control(json.dumps(ctl))
 
-    def req_handler_send_icc(self, cbt):
-        msg = cbt.request.params
-        ctl = ipoplib.CTL_SEND_ICC
-        ctl["IPOP"]["TransactionId"] = cbt.tag
-        req = ctl["IPOP"]["Request"]
-        req["OverlayId"] = msg["OverlayId"]
-        req["LinkId"] = msg["LinkId"]
-        req["Data"] = msg["Data"]
-        self.send_control(json.dumps(ctl))
-
     def process_cbt(self, cbt):
         if cbt.op_type == "Request":
             if cbt.request.action == "TCI_CREATE_LINK":
@@ -234,9 +224,6 @@ class TincanInterface(ControllerModule):
 
             elif cbt.request.action == "TCI_CREATE_TUNNEL":
                 self.req_handler_create_tunnel(cbt)
-
-            elif cbt.request.action == "TCI_ICC":
-                self.req_handler_send_icc(cbt)
 
             elif cbt.request.action == "TCI_INJECT_FRAME":
                 self.req_handler_inject_frame(cbt)

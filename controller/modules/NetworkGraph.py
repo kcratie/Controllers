@@ -224,7 +224,7 @@ class ConnEdgeAdjacenctList():
         return conn_edges
 
     def filter(self, edges):
-        """ Input is a list of edge state/type tuples """
+        """ Input is a list of edge type/state tuples """
         conn_edges = {}
         for peer_id in self.conn_edges:
             for etup in edges:

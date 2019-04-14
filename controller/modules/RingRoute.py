@@ -46,7 +46,8 @@ from NetworkGraph import ConnEdgeAdjacenctList
 CONFIG = {
     "OverlayId": "101000F",
     "LogFile": "/var/log/ipop-vpn/ring-route.log",
-    "LogLevel": "INFO"
+    "LogLevel": "INFO",
+    "MonitorInterval": 120
     }
 
 class netNode():
@@ -357,7 +358,7 @@ class RingRoute(app_manager.RyuApp):
         self.nodes = dict()             # net node instance for datapath
         self.flooding_bounds = dict()   # flooding bounds isntance for datapath
         self.idle_timeout = 30
-        self.monitor_interval = 30
+        self.monitor_interval = CONFIG["MonitorInterval"]
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER) # pylint: disable=no-member
     def switch_features_handler(self, ev):
