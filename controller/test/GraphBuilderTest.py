@@ -1,5 +1,4 @@
 import uuid
-import math
 from controller.modules.NetworkGraph import ConnectionEdge
 from controller.modules.NetworkGraph import ConnEdgeAdjacenctList
 from controller.modules.GraphBuilder import GraphBuilder

@@ -22,6 +22,7 @@ import math
 import random
 import threading
 import time
+from datetime import datetime
 from controller.framework.CFx import CFX
 from controller.framework.ControllerModule import ControllerModule
 from controller.modules.NetworkBuilder import NetworkBuilder
@@ -43,12 +44,12 @@ class DiscoveredPeer():
     def __repr__(self):
         state = "DiscoveredPeer<peer_id=%s, _is_excluded=%s, successive_fails=%s, removal_time=%s"\
                 ">\n" % (self.peer_id[:7], self._is_excluded, self.successive_fails,
-                       self.removal_time)
+                         self.removal_time)
         return state
 
     def exclude(self):
         self.successive_fails += 1
-        self.removal_time = (random.randint(0, 5) * DiscoveredPeer.ExclusionBaseInterval *
+        self.removal_time = (random.randint(1, 5) * DiscoveredPeer.ExclusionBaseInterval *
                              self.successive_fails) + time.time()
         self._is_excluded = True
 
@@ -189,7 +190,8 @@ class Topology(ControllerModule, CFX):
         if params["UpdateType"] == "DISCONNECTED" or params["UpdateType"] == "DEAUTHORIZED":
             self._net_ovls[olid]["KnownPeers"][peer_id].exclude()
             self.top_log("Excluding peer {0} until {1}".
-                         format(peer_id, self._net_ovls[olid]["KnownPeers"][peer_id].removal_time))
+                         format(peer_id, datetime.fromtimestamp(
+                             self._net_ovls[olid]["KnownPeers"][peer_id].removal_time)))
         if params["UpdateType"] == "REMOVED":
             self._do_topo_change_post(olid)
         elif params["UpdateType"] == "CONNECTED":
@@ -210,7 +212,8 @@ class Topology(ControllerModule, CFX):
         if (olid in self._net_ovls and peer_id in self._net_ovls[olid]["KnownPeers"] and
                 not self._net_ovls[olid]["KnownPeers"][peer_id].is_excluded):
             self._net_ovls[olid]["OndPeers"].append(op)
-            self.register_cbt("Logger", "LOG_INFO", "Added on demand request to queue {0}".format(op))
+            self.register_cbt("Logger", "LOG_INFO", "Added on demand request to queue {0}".
+                              format(op))
         else:
             self.register_cbt("Logger", "LOG_WARNING", "Invalid on demand tunnel request "
                               "parameter, OverlayId={0}, PeerId={1}".format(olid, peer_id))
@@ -271,6 +274,10 @@ class Topology(ControllerModule, CFX):
                               "local config, the rem act response is discarded")
             self.free_cbt(cbt)
             return
+        if not cbt.response.status:
+            peer_id = rem_act.recipient_id
+            self._net_ovls[olid]["KnownPeers"][peer_id].exclude()
+            # net builder needs the response, even if failed
         if rem_act.action == "TOP_NEGOTIATE_EDGE":
             edge_nego = rem_act.params
             edge_nego["is_accepted"] = rem_act.status
