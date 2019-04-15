@@ -121,8 +121,6 @@ class GraphBuilder():
         ldlnks = transition_adj_list.edges_bytype(["CETypeLongDistance"])
         num_existing_ldl = 0
         for peer_id, ce in ldlnks.items():
-            if self.is_too_close(ce.peer_id):
-                self._top.top_log("Discarded %s for being to close", peer_id)
             if ce.edge_state in ("CEStateUnknown", "CEStateCreated", "CEStateConnected") and \
                 peer_id not in adj_list and not self.is_too_close(ce.peer_id):
                 adj_list[peer_id] = ConnectionEdge(peer_id, ce.edge_id, ce.edge_type)
@@ -207,5 +205,4 @@ class GraphBuilder():
         self._nodes = list(self._peers)
         self._nodes.append(self._node_id)
         self._nodes.sort()
-        #nsz = len(self._nodes)
         self._my_idx = self._nodes.index(self._node_id)

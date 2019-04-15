@@ -72,10 +72,10 @@ class Tunnel():
         self.timeout = time.time() + state_timeout # timeout for current phase
 
     def __repr__(self):
-        state = "Tunnel<tnlid=%s, overlay_id=%s, peer_id=%s, tap_name=%s, mac=%s, fpr=%s, link=%s"\
-                ", peer_mac=%s, tunnel_state=%s, creation_start_time=%s>" % \
+        state = "Tunnel<tnlid=%s, overlay_id=%s, peer_id=%s, tap_name=%s, mac=%s, link=%s, "\
+                "peer_mac=%s, tunnel_state=%s, creation_start_time=%s>" % \
                 (self.tnlid[:7], self.overlay_id[:7], self.peer_id[:7], self.tap_name, self.mac,
-                 self.fpr, self.link, self.peer_mac, self.tunnel_state, self.creation_start_time)
+                 self.link, self.peer_mac, self.tunnel_state, self.creation_start_time)
         return state
 
     def __str__(self):
@@ -247,7 +247,7 @@ class LinkManager(ControllerModule):
             self.free_cbt(cbt)
             return
         data = cbt.response.data
-        #self.register_cbt("Logger", "LOG_INFO", "Tunnel stats: {0}".format(data))
+        #self.register_cbt("Logger", "LOG_DEBUG", "Tunnel stats: {0}".format(data))
         # Handle any connection failures and update tracking data
         for tnlid in data:
             for lnkid in data[tnlid]:
@@ -882,7 +882,8 @@ class LinkManager(ControllerModule):
             if cbt.request.params["Data"] == "LINK_STATE_DOWN":
                 # issue a link state check
                 lnkid = cbt.request.params["LinkId"]
-                tnlid = self.tunnel_id(lnkid)
+                tnlid = cbt.request.params["TunnelId"]
+                self.log("LOG_DEBUG", "LINK STATE DOWN cbt=%s", cbt)
                 self._tunnels[tnlid].tunnel_state = Tunnel.STATES.TNL_QUERYING
                 self.register_cbt("TincanInterface", "TCI_QUERY_LINK_STATS", [tnlid])
             elif cbt.request.params["Data"] == "LINK_STATE_UP":

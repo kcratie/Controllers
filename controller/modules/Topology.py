@@ -42,7 +42,7 @@ class DiscoveredPeer():
 
     def __repr__(self):
         state = "DiscoveredPeer<peer_id=%s, _is_excluded=%s, successive_fails=%s, removal_time=%s"\
-                ">" % (self.peer_id[:7], self._is_excluded, self.successive_fails,
+                ">\n" % (self.peer_id[:7], self._is_excluded, self.successive_fails,
                        self.removal_time)
         return state
 
@@ -289,8 +289,6 @@ class Topology(ControllerModule, CFX):
                     self.req_handler_peer_presence(cbt)
                 elif cbt.request.action == "VIS_DATA_REQ":
                     self.req_handler_vis_data(cbt)
-                #elif cbt.request.action == "TOP_QUERY_PEER_IDS":
-                #    self.req_handler_query_peer_ids(cbt)
                 elif cbt.request.action == "LNK_TUNNEL_EVENTS":
                     self.req_handler_tnl_data_update(cbt)
                 elif cbt.request.action == "TOP_REQUEST_OND_TUNNEL":
@@ -348,21 +346,12 @@ class Topology(ControllerModule, CFX):
 
     def top_send_negotiate_edge_req(self, edge_req):
         """Role Node A, Send a request to create an edge to the peer """
+        self.log("LOG_DEBUG", "Requesting edge auth edge_req=%s", edge_req)
         edge_params = edge_req._asdict()
         rem_act = RemoteAction(edge_req.overlay_id, recipient_id=edge_req.recipient_id,
                                recipient_cm="Topology", action="TOP_NEGOTIATE_EDGE",
                                params=edge_params)
         rem_act.submit_remote_act(self)
-
-        #remote_act = dict(OverlayId=overlay_id,
-        #                  RecipientId=parent_cbt.request.params["PeerId"],
-        #                  RecipientCM="Topology",
-        #                  Action="TOP_NEGOTIATE_EDGE",
-        #                  Params=edge_params)
-
-        #edge_cbt = self.create_cbt(self.module_name, "Signal", "SIG_REMOTE_ACTION", remote_act)
-        ## Send the message via SIG server to peer
-        #self.submit_cbt(edge_cbt)
 
     def _do_topo_change_post(self, overlay_id):
         # create and post the dict of adjacent connection edges

@@ -5,7 +5,7 @@
     <SchemaVersion>2.0</SchemaVersion>
     <ProjectGuid>{7b4898c4-0935-4440-9f85-b75010c30707}</ProjectGuid>
     <ProjectHome />
-    <StartupFile>controller\Controller.py</StartupFile>
+    <StartupFile>controller\test\DiscoveredPeerTest.py</StartupFile>
     <SearchPath />
     <WorkingDirectory>.</WorkingDirectory>
     <OutputPath>.</OutputPath>
@@ -47,12 +47,15 @@
     <Compile Include="controller\modules\Signal.py" />
     <Compile Include="controller\modules\UsageReport.py" />
     <Compile Include="controller\modules\__init__.py" />
+    <Compile Include="controller\test\DiscoveredPeerTest.py" />
+    <Compile Include="controller\test\GraphBuilderTest.py" />
     <Compile Include="controller\__init__.py" />
   </ItemGroup>
   <ItemGroup>
     <Folder Include="controller" />
     <Folder Include="controller\framework" />
     <Folder Include="controller\modules" />
+    <Folder Include="controller\test\" />
   </ItemGroup>
   <ItemGroup>
     <InterpreterReference Include="Global|PythonCore|3.6" />
