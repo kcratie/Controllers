@@ -237,6 +237,7 @@ class LearningTable():
         self.rnid_tbl = {}          # maps nid peer switch to track each switch's leaf devices
         self.mac_to_peersw = {}     # maps remote mac to its host switch PeerSwitch
         self.logger = ryu.logger
+        self._ts = time.time() + 60
 
     def __contains__(self, key_mac):
         return self.mac_to_port.__contains__(key_mac)
@@ -258,6 +259,9 @@ class LearningTable():
         return self.mac_to_port.get(key_mac, None)
 
     def __setitem__(self, key_mac, value):
+        if self._ts < time.time():
+            self.forget()
+            self._ts = time.time() + 30
         if isinstance(value, tuple):
             self.learn(src_mac=key_mac, in_port=value[0], rnid=value[1])
         else:
@@ -319,6 +323,7 @@ class LearningTable():
     def forget(self):
         """ Removes learning table entries associated with port no """
         self.mac_to_port.clear()
+        self.mac_to_peersw.clear()
 
     def register_peer_switch(self, peer_id, in_port):
         """ Track the adjacent switch and the port no """
@@ -356,7 +361,7 @@ class RingRoute(app_manager.RyuApp):
         ethernet.ethernet.register_packet_type(FloodRouteBound, FloodRouteBound.ETH_TYPE_BF)
         self.lt = LearningTable(self)   # The local nodes learning table
         self.nodes = dict()             # net node instance for datapath
-        self.flooding_bounds = dict()   # flooding bounds isntance for datapath
+        self.flooding_bounds = dict()   # flooding bounds instance for datapath
         self.idle_timeout = 30
         self.monitor_interval = CONFIG["MonitorInterval"]
 
@@ -711,14 +716,6 @@ class FloodRouteBound(packet_base.PacketBase):
     ETH_TYPE_BF = 0xc0c0
     FRB_BRDCST = 0
     FRB_LEAF_TX = 1
-    #_TYPE = {
-    #    "ascii": [
-    #        "root_nid",
-    #        "bound_nid",
-    #        "hop_count"
-    #    ]
-    #}
-
     def __init__(self, root_nid, bound_nid, hop_count, frb_type=0, pl_count=0):
         super(FloodRouteBound, self).__init__()
         self.root_nid = root_nid
@@ -741,9 +738,6 @@ class FloodRouteBound(packet_base.PacketBase):
         hops = unpk_data[2]
         ty = unpk_data[3]
         cnt = unpk_data[4]
-        #rid = uuid.UUID(bytes=buf[:16])
-        #bid = uuid.UUID(bytes=buf[16:32])
-        #hops = int.from_bytes(buf[32:33], byteorder=sys.byteorder)
         return cls(rid.hex, bid.hex, hops, ty, cnt), None, buf[cls._MIN_LEN:]
 
     def serialize(self, payload, prev):
@@ -759,7 +753,6 @@ class FloodRouteBound(packet_base.PacketBase):
 ###################################################################################################
 ###################################################################################################
 class FloodingBounds():
-    _MAX_NID = "ffffffffffffffffffffffffffffffff"
     def __init__(self, net_node):
         self._root_nid = None
         self._bound_nid = None
@@ -774,60 +767,52 @@ class FloodingBounds():
         peer1    - the peer in node list for which frb must be determined. NID must be greater than
                    self NID.
         peer2    - the next greater node immediately following peer1 in node list
-        prev_frb - the FRB on the received Bounded Flood. If a broadcast was initiated by a leaf
-                   node this value is None.
+        prev_frb - the FRB on the received Bounded Flood. If this is the first frb in response to a
+        bcast frame or a dst eth that is not in the LT, this value is None.
         """
         assert not((self._net_node.node_id >= peer1) or (peer2 and (peer1 >= peer2))), \
             "Invalid NID ordering self<%s>, peer1<%s>, peer2<%s>" % \
             (self._net_node.node_id, peer1, peer2)
         if not prev_frb:
-            return self._build_leaf_frb(peer2)
-        root_nid = self._net_node.node_id
-        hops = 1
-        bound_nid = FloodingBounds._MAX_NID # if no prev_frb init to max value
-        if prev_frb:
-            root_nid = prev_frb.root_nid
-            hops = prev_frb.hop_count + 1
-            bound_nid = prev_frb.bound_nid # use the prev_frb bound_nid if it exists
+            return self._build_initial_frb(peer2)
 
-        if (bound_nid < self._net_node.node_id) and (bound_nid < peer1):
-            # the prev_frb contained a bound to a wrap aound nNID which is smaller than ours.
-            if peer2 is None:
-                return FloodRouteBound(root_nid, bound_nid, hops)
-            bound_nid = peer2
-            return FloodRouteBound(root_nid, bound_nid, hops)
-        if (bound_nid > self._net_node.node_id) and (peer1 >= bound_nid):
-            return None # the peer being considered is beyond the bound
-        if not peer2:
-            bound_nid = prev_frb.bound_nid # alread set in default, handling no peer2
-        elif peer2 < bound_nid:
-            # the bound NID is the lesser of the bounds, ie., the bound_nid in the received frb,
-            # or the NID of the next adjacent peer.
+        root_nid = prev_frb.root_nid
+        bound_nid = prev_frb.bound_nid # use the prev_frb bound_nid when it exists
+        hops = prev_frb.hop_count + 1
+        if bound_nid > self._net_node.node_id:
+            if bound_nid <= peer1:
+                return None # the peer being considered is beyond the bound
+            if peer2 and peer2 < bound_nid:
+                # the bound NID is the lesser of the bounds, ie., the bound_nid in the received frb,
+                # or the NID of the next adjacent peer.
+                bound_nid = peer2
+        # the bound nid is typically greater than the local nid, except for the special case when
+        # your predecessor has only a single edge (to you) so the frb is bounded on himself and as
+        # a predecessor his nid is smaller.
+        elif peer2: # and implicitly (bound_nid < self._net_node.node_id) and (bound_nid < peer1)
             bound_nid = peer2
         return FloodRouteBound(root_nid, bound_nid, hops)
 
-    def _build_leaf_frb(self, peer2):
+    def _build_initial_frb(self, peer2):
         """
-        Creates FRB in scenario where the brdcast originated from a leaf node and there is no
-        prev_frb.
+        Creates initial frb in response to a bcast frame or a dst eth that is not in the LT;
+        there will be no prev_frb.
         """
         root_nid = self._net_node.node_id
+        bound_nid = self._net_node.node_id
         hops = 1
-        bound_nid = FloodingBounds._MAX_NID # if no prev_frb init to max value
-        if peer2 is None:
-            bound_nid = self._net_node.node_id
-        elif peer2 < bound_nid:
+        if peer2:
             bound_nid = peer2
         return FloodRouteBound(root_nid, bound_nid, hops)
 
     def _build_succ_frb(self, succ_nid, prev_frb):
         """
         Used when all adj peers have a lower nid, ie, both peer1 and peer 2 are None. In this case
-        we expect wrap around to determine the successor as the node with the smallest NID.
+        wrap around determines the successor as the node with the smallest NID.
         """
         root_nid = self._net_node.node_id
+        bound_nid = self._net_node.node_id # init to self
         hops = 1
-        bound_nid = self._net_node.node_id # if no prev_frb init to max value
         if prev_frb:
             root_nid = prev_frb.root_nid
             hops = prev_frb.hop_count + 1
@@ -835,7 +820,6 @@ class FloodingBounds():
         if succ_nid == bound_nid:
             return None
         return FloodRouteBound(root_nid, bound_nid, hops)
-
 
     def bounds(self, prev_frb=None, exclude_ports=None):
         """
@@ -850,7 +834,6 @@ class FloodingBounds():
         node_list.sort()
         idx = node_list.index(self._net_node.node_id)
         num_peers = len(node_list)
-        # prev_i = (idx + num_peers - 1) % num_peers # ring wraps around
         greater_peers = node_list[idx+1:]
         if not greater_peers:
             succ_i = (idx + 1) % num_peers
@@ -864,46 +847,14 @@ class FloodingBounds():
 
         for i, nid in enumerate(greater_peers):
             peer2 = None # default val when i is last node in list
-            if i+1 <= len(greater_peers) - 1:
+            if i + 1 <= len(greater_peers) - 1:
                 peer2 = greater_peers[i+1]
             frb_hdr = self._build_frb(nid, peer2, prev_frb)
-            if not frb_hdr:
-                continue
-            prtno = self._net_node.query_port_no(nid)
-            if prtno and prtno not in exclude_ports:
-                out_bounds.append((prtno, frb_hdr))
+            if frb_hdr:
+                prtno = self._net_node.query_port_no(nid)
+                if prtno and prtno not in exclude_ports:
+                    out_bounds.append((prtno, frb_hdr))
         return out_bounds
-
-    def _build_scc_out_bounds(self, prev):
-        out_bounds = []
-        root_nid = self._net_node.node_id
-        bound_nid = self._net_node.node_id
-        hops = 1
-        if prev:
-            root_nid = prev.root_nid
-            bound_nid = prev.bound_nid
-            hops = prev.hop_count + 1
-
-        succ_nodes = self._net_node.topo.filter([("CETypeSuccessor", "CEStateConnected")])
-        if succ_nodes:
-            succ_id_list = sorted([*succ_nodes.keys()])
-            first_succ_id = succ_id_list[0]
-
-            if bound_nid == first_succ_id:
-                return out_bounds
-
-            for prtno in self._net_node.links:
-                if self._net_node.links[prtno][2] == first_succ_id:
-                    out_bounds.append((prtno, FloodRouteBound(root_nid, bound_nid, hops)))
-                    break
-
-        return out_bounds
-
-    def succ_bounds(self, prev_frb=None):
-        """
-        returns a list of tuples (egress, frb_proto)
-        """
-        return self._build_scc_out_bounds(prev_frb)
 
 ###################################################################################################
 ###################################################################################################

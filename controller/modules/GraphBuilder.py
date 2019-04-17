@@ -32,7 +32,7 @@ class GraphBuilder():
     def __init__(self, cfg, top=None):
         self.overlay_id = cfg["OverlayId"]
         self._node_id = cfg["NodeId"]
-        self._peers = None # sorted(cfg.get("Peers", []))
+        self._peers = None
         # enforced is a list of peer ids that should always have a direct edge
         self._enforced = cfg.get("EnforcedEdges", {})
         # only create edges from the enforced list

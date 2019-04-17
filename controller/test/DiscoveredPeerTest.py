@@ -2,7 +2,6 @@ import uuid
 import time
 import random
 from controller.modules.Topology import DiscoveredPeer
-from controller.modules.GraphBuilder import GraphBuilder
 
 
 def main():

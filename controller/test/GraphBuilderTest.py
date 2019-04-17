@@ -1,6 +1,4 @@
 import uuid
-from controller.modules.NetworkGraph import ConnectionEdge
-from controller.modules.NetworkGraph import ConnEdgeAdjacenctList
 from controller.modules.GraphBuilder import GraphBuilder
 
 #def draw_hist(samples):
@@ -25,7 +23,6 @@ def main():
     for _ in range(0, max_nodes):
         node_ids.append(str(uuid.uuid4().hex)[:7])
     print("Node IDs %s"%(node_ids))
-    net_graph = ConnEdgeAdjacenctList()
     cnt = 0
     for i in range(0, max_nodes):
         node_id = node_ids[i]
@@ -51,17 +48,6 @@ def main():
             cnt += 1
         print("Is %s too close to me %s  %s" % (node_id[:7], node_id[:7], tc))
 
-        #res = gb.symphony_prob_distribution(1000, 1000)
-        #with open("results.txt", "w") as f:
-        #    f.write(str(res))
-
-        #ascii_histogram(res)
-        #adjl = gb.build_adj_list()
-        #net_graph.add_adj_list(adjl)
-
-    with open("results.txt", "w") as f:
-        f.write("Network Graph %s"% (net_graph))
-    #print("Network Graph %s"% (net_graph))
 
 if __name__ == "__main__":
     main()

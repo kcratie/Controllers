@@ -254,8 +254,8 @@ class NetworkBuilder():
             ce.edge_id = edge_req.edge_id
             edge_resp = EdgeResponse(is_accepted=True, data=msg)
             self._top.top_log(msg)
-            self._top.top_log("Existing CE={0} moved to negotiated_edges={1}".format(ce,
-                              self._negotiated_edges))
+            self._top.top_log("Existing CE={0} moved to negotiated_edges={1}".
+                              format(ce, self._negotiated_edges))
         else:
             edge_resp = EdgeResponse(False, "E6 - Request colides with an edge being destroyed."\
                                             "Try later")
