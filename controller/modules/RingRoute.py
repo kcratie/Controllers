@@ -771,10 +771,10 @@ class FloodingBounds():
         bcast frame or a dst eth that is not in the LT, this value is None.
         """
         assert not((self._net_node.node_id >= peer1) or (peer2 and (peer1 >= peer2))), \
-            "Invalid NID ordering self<%s>, peer1<%s>, peer2<%s>" % \
+            "Invalid successor NID ordering self<%s>, peer1<%s>, peer2<%s>" % \
             (self._net_node.node_id, peer1, peer2)
         if not prev_frb:
-            return self._build_initial_frb(peer2)
+            return self._build_initial_frb_succ(peer2)
 
         root_nid = prev_frb.root_nid
         bound_nid = prev_frb.bound_nid # use the prev_frb bound_nid when it exists
@@ -793,11 +793,23 @@ class FloodingBounds():
             bound_nid = peer2
         return FloodRouteBound(root_nid, bound_nid, hops)
 
-    def _build_initial_frb(self, peer2):
+    def _build_initial_frb_succ(self, peer2):
         """
         Creates initial frb in response to a bcast frame or a dst eth that is not in the LT;
         there will be no prev_frb.
         """
+        root_nid = self._net_node.node_id
+        bound_nid = self._net_node.node_id
+        hops = 1
+        if peer2:
+            bound_nid = peer2
+        return FloodRouteBound(root_nid, bound_nid, hops)
+
+    def _build_initial_frb_pred(self, peer1, peer2):
+        assert not((self._net_node.node_id >= peer1) or (peer2 and (peer1 >= peer2))), \
+            "Invalid predecessor NID ordering peer1<%s>, peer2<%s>, self<%s>" % \
+            (peer1, peer2, self._net_node.node_id)
+        # base scenario when the local node is initiating the FRB
         root_nid = self._net_node.node_id
         bound_nid = self._net_node.node_id
         hops = 1
@@ -821,6 +833,8 @@ class FloodingBounds():
             return None
         return FloodRouteBound(root_nid, bound_nid, hops)
 
+
+
     def bounds(self, prev_frb=None, exclude_ports=None):
         """
         Creates a list of out_bound tuples, in the format (egress, frb).
@@ -834,27 +848,98 @@ class FloodingBounds():
         node_list.sort()
         idx = node_list.index(self._net_node.node_id)
         num_peers = len(node_list)
-        greater_peers = node_list[idx+1:]
-        if not greater_peers:
-            succ_i = (idx + 1) % num_peers
-            nid = node_list[succ_i]
-            frb_hdr = self._build_succ_frb(nid, prev_frb)
-            if frb_hdr:
-                prtno = self._net_node.query_port_no(nid)
-                if prtno and prtno not in exclude_ports:
-                    out_bounds.append((prtno, frb_hdr))
-            return out_bounds
-
-        for i, nid in enumerate(greater_peers):
-            peer2 = None # default val when i is last node in list
-            if i + 1 <= len(greater_peers) - 1:
-                peer2 = greater_peers[i+1]
-            frb_hdr = self._build_frb(nid, peer2, prev_frb)
-            if frb_hdr:
-                prtno = self._net_node.query_port_no(nid)
-                if prtno and prtno not in exclude_ports:
-                    out_bounds.append((prtno, frb_hdr))
+        myi = idx
+        my_nid = self._net_node.node_id
+        # preconditions:
+        #   peer1 < peer2
+        #   nid < peer1 < peer2 || peer1 < peer2 < self
+        for i, nid in enumerate(node_list):
+            if i == myi:
+                continue
+            peer1 = nid
+            p2i = (i + 1) % num_peers
+            peer2 = node_list[p2i]
+            # base scenario when the local node is initiating the FRB
+            hops = 1
+            root_nid = self._net_node.node_id
+            bound_nid = self._net_node.node_id
+            if not prev_frb:
+                bound_nid = peer2
+                frb_hdr = FloodRouteBound(root_nid, bound_nid, hops)
+                if frb_hdr:
+                    prtno = self._net_node.query_port_no(nid)
+                    if prtno and prtno not in exclude_ports:
+                        out_bounds.append((prtno, frb_hdr))
+            else:
+                assert prev_frb.bound_nid != my_nid,\
+                    "this frb should not have reached this node ny_nid={0} prev_frb={1}".\
+                    format(my_nid, prev_frb)
+                hops = prev_frb.hop_count + 1
+                root_nid = prev_frb.root_nid
+                if peer1 < my_nid: # peer1 is a predecessor
+                    if prev_frb.bound_nid > peer1 and prev_frb.bound_nid < my_nid: # bcast to peer1
+                        if peer2 < prev_frb.bound_nid:
+                            bound_nid = peer2
+                        else:
+                            bound_nid = prev_frb.bound_nid
+                    if prev_frb.bound_nid > my_nid or prev_frb.bound_nid < peer1:
+                        continue # do not bcast to peer1
+                else: # peer1 is a successor
+                    if prev_frb.bound_nid < my_nid: # bcast to peer1
+                        if peer2 < my_nid and peer2 > prev_frb.bound_nid:
+                            bound_nid = prev_frb.bound_nid
+                        elif peer2 > my_nid or peer2 < prev_frb.bound_nid:
+                            bound_nid = peer2
+                        else: bound_nid = peer2
+                    else: # prev_frb.bound_nid > my_nid
+                        if prev_frb.bound_nid <= peer1:
+                            continue
+                        if peer2 < my_nid or prev_frb.bound_nid < peer2:
+                            bound_nid = prev_frb.bound_nid
+                        else:
+                            bound_nid = peer2
+                frb_hdr = FloodRouteBound(root_nid, bound_nid, hops)
+                if frb_hdr:
+                    prtno = self._net_node.query_port_no(nid)
+                    if prtno and prtno not in exclude_ports:
+                        out_bounds.append((prtno, frb_hdr))
         return out_bounds
+
+
+
+        #if not prev_frb:
+        #    # bcast to predecessors, this is never done when propagating a derived frb
+        #    for i, nid in enumerate(node_list[:idx]):
+        #        peer2 = None # No more incoming LDL
+        #        if i + 1 < idx:
+        #            peer2 = node_list[i+1]
+        #        frb_hdr = self._build_initial_frb_pred(nid, peer2)
+        #        if frb_hdr:
+        #            prtno = self._net_node.query_port_no(nid)
+        #            if prtno and prtno not in exclude_ports:
+        #                out_bounds.append((prtno, frb_hdr))
+        ## bcast to successors
+        #greater_peers = node_list[idx+1:]
+        #if not greater_peers:
+        #    succ_i = (idx + 1) % num_peers
+        #    nid = node_list[succ_i]
+        #    frb_hdr = self._build_succ_frb(nid, prev_frb)
+        #    if frb_hdr:
+        #        prtno = self._net_node.query_port_no(nid)
+        #        if prtno and prtno not in exclude_ports:
+        #            out_bounds.append((prtno, frb_hdr))
+        #    return out_bounds
+
+        #for i, nid in enumerate(greater_peers):
+        #    peer2 = None # default val when no more outgoing LDL
+        #    if i + 1 <= len(greater_peers) - 1:
+        #        peer2 = greater_peers[i+1]
+        #    frb_hdr = self._build_frb(nid, peer2, prev_frb)
+        #    if frb_hdr:
+        #        prtno = self._net_node.query_port_no(nid)
+        #        if prtno and prtno not in exclude_ports:
+        #            out_bounds.append((prtno, frb_hdr))
+
 
 ###################################################################################################
 ###################################################################################################
