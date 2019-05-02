@@ -995,8 +995,7 @@ class LinkManager(ControllerModule):
         self.register_cbt("Logger", "LOG_INFO", "Tunnel {0} auth timed out".format(tnl.tnlid))
         param = {
             "UpdateType": "DEAUTHORIZED", "OverlayId": tnl.overlay_id,
-            "PeerId": tnl.peer_id, "TunnelId": tnl.tnlid, "LinkId": tnl.link.lnkid,
-            "TapName": tnl.tap_name}
+            "PeerId": tnl.peer_id, "TunnelId": tnl.tnlid, "TapName": tnl.tap_name}
         self._link_updates_publisher.post_update(param)
         self._cleanup_tunnel(tnl)
 

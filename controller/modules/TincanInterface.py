@@ -201,7 +201,7 @@ class TincanInterface(ControllerModule):
         req["OverlayId"] = msg["OverlayId"]
         req["TunnelId"] = msg["TunnelId"]
         self.send_control(json.dumps(ctl))
-        if msg["TapName"]:
+        if "TapName" in msg and msg["TapName"]:
             ipoplib.runshell([self.iptool, "link", "del", "dev", msg["TapName"]])
 
     def req_handler_remove_link(self, cbt):

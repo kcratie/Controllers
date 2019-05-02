@@ -450,10 +450,9 @@ class RingRoute(app_manager.RyuApp):
                               datapath.id, eth.src, eth.dst, in_port)
             self.handle_bounded_flood_msg(datapath, pkt, in_port, msg)
         elif dst in self.lt:
-            self.logger.debug("LT HIT %s %s %s %s", dpid, src, dst, in_port)
+            out_port = self.lt[dst]
             # learn a mac address
             self.lt[src] = in_port
-            out_port = self.lt[dst]
             # create new flow rule
             actions = [parser.OFPActionOutput(out_port)]
             match = parser.OFPMatch(in_port=in_port, eth_dst=dst, eth_src=src)
@@ -686,7 +685,7 @@ class RingRoute(app_manager.RyuApp):
                 fld = FloodingBounds(self.nodes[dpid])
                 self.flooding_bounds[dpid] = fld
             out_bounds = fld.bounds(rcvd_frb, [in_port])
-            self.logger.info("Derived FRB generated=%s:", out_bounds)
+            self.logger.info("Derived FRB generated=%s", out_bounds)
             if out_bounds:
                 self.do_bounded_flood(datapath, in_port, out_bounds, src, payload)
 
@@ -820,10 +819,15 @@ class FloodingBounds():
                             bound_nid = peer2
                         else:
                             bound_nid = prev_frb.bound_nid
+                    else:
+                        continue
                 else: # peer1 is a successor
                     if prev_frb.bound_nid < my_nid: # bcast to peer1
                         if peer2 < my_nid and peer2 > prev_frb.bound_nid:
                             bound_nid = prev_frb.bound_nid
+                        elif (peer2 < my_nid and peer2 <= prev_frb.bound_nid) or \
+                            peer2 > my_nid:
+                            bound_nid = peer2
                     else: # prev_frb.bound_nid > my_nid
                         if prev_frb.bound_nid <= peer1:
                             continue
