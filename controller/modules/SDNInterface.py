@@ -33,7 +33,7 @@ class SDNIRequestHandler(socketserver.BaseRequestHandler):
         # task structure
         # dict(Request=dict(Action=None, Params=None),
         #      Response=dict(Status=False, Data=None))
-        data = self.request.recv(4096)
+        data = self.request.recv(65536)
         if not data:
             return
         task = json.loads(data.decode("utf-8"))
@@ -51,6 +51,7 @@ class SDNIRequestHandler(socketserver.BaseRequestHandler):
             self.server.sdni.sdn_log("An unrecognized SDNI task request was discarded {0}".
                                      format(task), "LOG_WARNING")
             task["Response"] = dict(Status=False, Data=dict(ErrorMsg="Unsupported request"))
+        # todo: send response length as a prefix
         self.request.sendall(bytes(json.dumps(task) + "\n", "utf-8"))
 
     def _handle_get_topo(self, task):
@@ -103,6 +104,7 @@ class SDNInterface(ControllerModule):
     def resp_handler_tunnel_info(self, cbt):
         if not cbt.response.status:
             self.free_cbt(cbt)
+            self._is_updating = False
             return
         resp_data = cbt.response.data
         discard = []
@@ -163,7 +165,7 @@ class SDNInterface(ControllerModule):
             self._lock.release()
             time.sleep(1)
             self._lock.acquire()
-        if tries == 3:
+        if self._is_updating:
             self._lock.release()
             return topo
         topo = self._adj_lists

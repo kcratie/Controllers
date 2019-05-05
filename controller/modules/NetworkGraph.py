@@ -151,7 +151,7 @@ class ConnEdgeAdjacenctList():
         self.conn_edges = {}
         self._successor_nid = node_id
         self._predecessor_nid = node_id
-        self.degree_threshold = (2 * (max_succ + max_ldl)) + max_ond
+        self.degree_threshold = (2 * (max_succ + max_ldl))
         self.max_successors = max_succ
         self.max_ldl = max_ldl
         self.max_ondemand = max_ond

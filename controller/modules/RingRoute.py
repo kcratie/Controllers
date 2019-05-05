@@ -201,7 +201,7 @@ class netNode():
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 sock.connect(host_addr)
                 sock.sendall(bytes(sd + "\n", "utf-8"))
-                received = str(sock.recv(4096), "utf-8")
+                received = str(sock.recv(65536), "utf-8")
                 if received:
                     recv_data = json.loads(received)
                     break
@@ -871,3 +871,4 @@ class TrafficAnalyzer():
             #    tunnel_reqs.append((psw.rnid, "REMOVE"))
             #    self.ond.discard(psw.rnid)
         return tunnel_reqs
+
