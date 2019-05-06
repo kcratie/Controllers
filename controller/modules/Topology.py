@@ -34,32 +34,35 @@ from controller.framework.ipoplib import RemoteAction
 
 class DiscoveredPeer():
     ExclusionBaseInterval = 60
-    def __init__(self, peer_id, is_excluded=False, successive_failures=0,
-                 removal_time=time.time()):
+    def __init__(self, peer_id):
         self.peer_id = peer_id
-        self._is_excluded = is_excluded
-        self.successive_fails = successive_failures
-        self.removal_time = removal_time
+        self.is_banned = False
+        self.successive_fails = 0
+        self.available_time = time.time()
 
     def __repr__(self):
-        state = "DiscoveredPeer<peer_id=%s, _is_excluded=%s, successive_fails=%s, removal_time=%s"\
-                ">\n" % (self.peer_id[:7], self._is_excluded, self.successive_fails,
-                         self.removal_time)
+        state = "DiscoveredPeer<peer_id=%s, is_banned=%s, successive_fails=%s, available_time=%s>"\
+                % (self.peer_id[:7], self.is_banned, self.successive_fails,
+                   datetime.fromtimestamp(self.available_time))
         return state
 
     def exclude(self):
         self.successive_fails += 1
-        self.removal_time = (random.randint(1, 5) * DiscoveredPeer.ExclusionBaseInterval *
-                             self.successive_fails) + time.time()
-        self._is_excluded = True
+        self.available_time = (random.randint(2, 5) * DiscoveredPeer.ExclusionBaseInterval *
+                               self.successive_fails) + time.time()
+        if self.successive_fails >= 10:
+            self.is_banned = True
 
     def restore(self):
-        self._is_excluded = False
+        self.is_banned = False
         self.successive_fails = 0
 
+    def presence(self):
+        self.available_time = time.time()
+
     @property
-    def is_excluded(self):
-        return self._is_excluded and time.time() < self.removal_time
+    def is_available(self):
+        return not self.is_banned and time.time() >= self.available_time
 
 class Topology(ControllerModule, CFX):
     def __init__(self, cfx_handle, module_config, module_name):
@@ -128,9 +131,11 @@ class Topology(ControllerModule, CFX):
         new_disc = False
         disc = self._net_ovls[olid]["KnownPeers"].get(peer_id)
         if not disc:
-            self._net_ovls[olid]["KnownPeers"][peer_id] = DiscoveredPeer(peer_id)
+            disc = DiscoveredPeer(peer_id)
+            self._net_ovls[olid]["KnownPeers"][peer_id] = disc
             new_disc = True
-        if new_disc or disc.is_excluded:
+        if new_disc or not disc.is_available:
+            disc.presence()
             self._net_ovls[olid]["NewPeerCount"] += 1
             if self._net_ovls[olid]["NewPeerCount"] >= self.config["PeerDiscoveryCoalesce"]:
                 self.register_cbt("Logger", "LOG_DEBUG", "Coalesced {0} new peer discovery, "
@@ -142,20 +147,6 @@ class Topology(ControllerModule, CFX):
                                   "refresh".format(self._net_ovls[olid]["NewPeerCount"]))
         cbt.set_response(None, True)
         self.complete_cbt(cbt)
-
-    #def req_handler_query_peer_ids(self, cbt):
-    #    peer_ids = {}
-    #    try:
-    #            for olid in self.config["Overlays"]:
-    #                peer_ids[olid] = set(peer_id for peer_id in self._net_ovls[olid]["KnownPeers"]\
-    #                    if not self._net_ovls[olid]["KnownPeers"][peer_id].is_excluded)
-    #            cbt.set_response(data=peer_ids, status=True)
-    #            self.complete_cbt(cbt)
-    #    except KeyError:
-    #        cbt.set_response(data=None, status=False)
-    #        self.complete_cbt(cbt)
-    #        self.register_cbt("Logger", "LOG_WARNING", "Overlay Id is not valid {0}".
-    #                          format(cbt.response.data))
 
     def req_handler_vis_data(self, cbt):
         topo_data = {}
@@ -191,7 +182,7 @@ class Topology(ControllerModule, CFX):
             self._net_ovls[olid]["KnownPeers"][peer_id].exclude()
             self.top_log("Excluding peer {0} until {1}".
                          format(peer_id, datetime.fromtimestamp(
-                             self._net_ovls[olid]["KnownPeers"][peer_id].removal_time)))
+                             self._net_ovls[olid]["KnownPeers"][peer_id].available_time)))
         if params["UpdateType"] == "REMOVED":
             self._do_topo_change_post(olid)
         elif params["UpdateType"] == "CONNECTED":
@@ -210,7 +201,7 @@ class Topology(ControllerModule, CFX):
         olid = op["OverlayId"]
         peer_id = op["PeerId"]
         if (olid in self._net_ovls and peer_id in self._net_ovls[olid]["KnownPeers"] and
-                not self._net_ovls[olid]["KnownPeers"][peer_id].is_excluded):
+                self._net_ovls[olid]["KnownPeers"][peer_id].is_available):
             self._net_ovls[olid]["OndPeers"].append(op)
             self.register_cbt("Logger", "LOG_INFO", "Added on demand request to queue {0}".
                               format(op))
@@ -380,7 +371,7 @@ class Topology(ControllerModule, CFX):
             enf_lnks = ovl_cfg.get("EnforcedLinks", {})
             manual_topo = ovl_cfg.get("ManualTopology", False)
             peer_list = [peer_id for peer_id in net_ovl["KnownPeers"] \
-                if not net_ovl["KnownPeers"][peer_id].is_excluded]
+                if net_ovl["KnownPeers"][peer_id].is_available]
             self.register_cbt("Logger", "LOG_DEBUG", "Peerlist for Netbuilder {0}"
                               .format(peer_list))
 
