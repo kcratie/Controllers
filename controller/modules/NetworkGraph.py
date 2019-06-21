@@ -26,31 +26,31 @@ except ImportError:
 import struct
 import uuid
 
-EdgeTypes1 = ["CETypeUnknown", "CETypeEnforced", "CETypeSuccessor", "CETypeLongDistance",
-              "CETypeOnDemand"]
-EdgeTypes2 = ["CETypeUnknown", "CETypeIEnforced", "CETypePredecessor", "CETypeILongDistance",
-              "CETypeIOnDemand"]
-EdgeStates = ["CEStateUnknown", "CEStateCreated", "CEStateConnected", "CEStateDisconnected",
+EdgeTypesOut = ["CETypeUnknown", "CETypeEnforced", "CETypeSuccessor", "CETypeLongDistance",
+                "CETypeOnDemand"]
+EdgeTypesIn = ["CETypeUnknown", "CETypeIEnforced", "CETypePredecessor", "CETypeILongDistance",
+               "CETypeIOnDemand"]
+EdgeStates = ["CEStateInitialized", "CEStateCreated", "CEStateConnected", "CEStateDisconnected",
               "CEStateDeleting"]
 
 def transpose_edge_type(edge_type):
-    et = EdgeTypes1[0]
+    et = EdgeTypesOut[0]
     if edge_type == "CETypeEnforced":
-        et = EdgeTypes2[1]
+        et = EdgeTypesIn[1]
     elif edge_type == "CETypeSuccessor":
-        et = EdgeTypes2[2]
+        et = EdgeTypesIn[2]
     elif edge_type == "CETypeLongDistance":
-        et = EdgeTypes2[3]
+        et = EdgeTypesIn[3]
     elif edge_type == "CETypeOnDemand":
-        et = EdgeTypes2[4]
+        et = EdgeTypesIn[4]
     elif edge_type == "CETypeIEnforced":
-        et = EdgeTypes1[1]
+        et = EdgeTypesOut[1]
     elif edge_type == "CETypePredecessor":
-        et = EdgeTypes1[2]
+        et = EdgeTypesOut[2]
     elif edge_type == "CETypeILongDistance":
-        et = EdgeTypes1[3]
+        et = EdgeTypesOut[3]
     elif edge_type == "CETypeIOnDemand":
-        et = EdgeTypes1[4]
+        et = EdgeTypesOut[4]
     return et
 
 class ConnectionEdge():
@@ -63,7 +63,7 @@ class ConnectionEdge():
             self.edge_id = uuid.uuid4().hex
         self.created_time = time.time()
         self.connected_time = None
-        self.edge_state = "CEStateUnknown"
+        self.edge_state = "CEStateInitialized"
         self.edge_type = edge_type
         self.marked_for_delete = False
 
@@ -151,10 +151,16 @@ class ConnEdgeAdjacenctList():
         self.conn_edges = {}
         self._successor_nid = node_id
         self._predecessor_nid = node_id
-        self.degree_threshold = (2 * (max_succ + max_ldl))
+        self.degree_threshold = 2 * (max_ldl + max_succ + max_ond)
         self.max_successors = max_succ
         self.max_ldl = max_ldl
         self.max_ondemand = max_ond
+        self.num_ldl = 0
+        self.num_ldli = 0
+        self.num_succ = 0
+        self.num_succi = 0
+        self.num_ond = 0
+        self.num_ondi = 0
 
     def __len__(self):
         return len(self.conn_edges)
@@ -196,12 +202,27 @@ class ConnEdgeAdjacenctList():
     def is_predecessor(self, peer_id):
         return bool(peer_id == self._predecessor_nid)
 
-    def at_threshold(self):
-        return bool(len(self.conn_edges) >= self.degree_threshold)
+    def is_threshold_ondi(self):
+        return bool(self.num_ondi >= self.max_ondemand)
+
+    def is_threshold_ldli(self):
+        return bool(self.num_ldli >= self.max_ldl)
 
     def add_connection_edge(self, ce):
         self.conn_edges[ce.peer_id] = ce
         self.update_closest()
+        if ce.edge_type == "CETypeLongDistance":
+            self.num_ldl += 1
+        if ce.edge_type == "CETypeILongDistance":
+            self.num_ldli += 1
+        elif ce.edge_type == "CETypeSuccessor":
+            self.num_succ += 1
+        elif ce.edge_type == "CETypePredecessor":
+            self.num_succi += 1
+        elif ce.edge_type == "CETypeOnDemand":
+            self.num_ond += 1
+        elif ce.edge_type == "CETypeIOnDemand":
+            self.num_ondi += 1
 
     def remove_connection_edge(self, peer_id):
         ce = self.conn_edges.pop(peer_id, None)

@@ -19,8 +19,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 # THE SOFTWARE.
 
-#import threading
-import math
+
 import time
 from copy import deepcopy
 from collections import namedtuple
@@ -44,6 +43,7 @@ class NetworkBuilder():
         self._max_concurrent_wrkload = max_wrkld
         #self._lock = threading.Lock()
         self._top = top_man
+        self._ops = {}
 
     def __repr__(self):
         state = "current_adj_list=%s, pending_adj_list=%s, negotiated_edges=%s, "\
@@ -91,6 +91,8 @@ class NetworkBuilder():
             self._current_adj_list.update_closest()
             self._mark_edges_for_removal()
         self._process_pending_adj_list()
+        #self._create_oplist()
+        #self._process_ops()
 
     def update_edge_state(self, connection_event):
         """
@@ -135,7 +137,7 @@ class NetworkBuilder():
             self._top.top_remove_edge(overlay_id, peer_id)
         elif connection_event["UpdateType"] == "DEAUTHORIZED":
             ce = self._current_adj_list[peer_id]
-            assert ce.edge_state == "CEStateUnknown", "Deauth CE={0}".format(ce)
+            assert ce.edge_state == "CEStateInitialized", "Deauth CE={0}".format(ce)
             del self._current_adj_list[peer_id]
             self._refresh_in_progress -= 1
         else:
@@ -189,12 +191,14 @@ class NetworkBuilder():
                 break
             rmv_list.append(peer_id)
             ce = self._pending_adj_list[peer_id]
-            if self._current_adj_list.at_threshold() and ce.edge_type != "CETypeSuccessor":
+            if ce.edge_type == "CETypeOnDemand" and \
+                self._current_adj_list.num_ldl >= self._current_adj_list.max_ldl:
                 continue
             if peer_id in self._negotiated_edges:  # an edge has already been negotiated
                 continue
             if peer_id not in self._current_adj_list:
-                assert ce.edge_state == "CEStateUnknown", "State!=CEStateUnknown CE={0}".format(ce)
+                assert ce.edge_state == "CEStateInitialized", \
+                    "State!=CEStateInitialized CE={0}".format(ce)
                 self._current_adj_list[peer_id] = ce
                 nego_list.append(ce)
         for peer_id in rmv_list:
@@ -240,12 +244,12 @@ class NetworkBuilder():
                 .format(self._current_adj_list[peer_id].edge_id[:7])
             edge_resp = EdgeResponse(is_accepted=False, data=msg)
             self._top.top_log(msg)
-        elif edge_state == "CEStateUnknown" and nid < edge_req.initiator_id:
+        elif edge_state == "CEStateInitialized" and nid < edge_req.initiator_id:
             msg = "E2 - Edge request collision, your request is superceeded by predecessor. "\
                         "TunnelId={0}".format(self._current_adj_list[peer_id].edge_id[:7])
             edge_resp = EdgeResponse(is_accepted=False, data=msg)
             self._top.top_log(msg)
-        elif edge_state == "CEStateUnknown" and nid > edge_req.initiator_id:
+        elif edge_state == "CEStateInitialized" and nid > edge_req.initiator_id:
             ce = self._current_adj_list.remove_connection_edge(peer_id)
             ce.edge_type = ng.transpose_edge_type(edge_req.edge_type)
             self._negotiated_edges[peer_id] = ce
@@ -269,15 +273,15 @@ class NetworkBuilder():
         peer_id = edge_req.initiator_id
         if peer_id in self._current_adj_list:
             edge_resp = self._resolve_request_collision(edge_req)
-        elif len(self._current_adj_list) > math.floor(1.5*self._current_adj_list.degree_threshold):
-            edge_resp = EdgeResponse(is_accepted=False, data="E3 - Too many existing edges.")
-        elif self._current_adj_list.at_threshold() and edge_req.edge_type == "CETypeSuccessor":
+        elif edge_req.edge_type == "CETypeSuccessor":
             edge_resp = EdgeResponse(is_accepted=True, data="Successor edge permitted")
-        elif not self._current_adj_list.at_threshold():
+        elif edge_req.edge_type == "CETypeEnforced":
+            edge_resp = EdgeResponse(is_accepted=True, data="Enforced edge permitted")
+        elif not self._current_adj_list.is_threshold_ldli():
             edge_resp = EdgeResponse(is_accepted=True, data="Any edge permitted")
         else:
             edge_resp = EdgeResponse(is_accepted=False,
-                                     data="E5 - Too many low priority edges.")
+                                     data="E5 - Too many existing edges.")
 
         if edge_resp.is_accepted and edge_resp.data[:2] != "E0":
             et = ng.transpose_edge_type(edge_req.edge_type)

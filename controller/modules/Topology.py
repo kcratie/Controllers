@@ -224,8 +224,8 @@ class Topology(ControllerModule, CFX):
             # this node miss the presence notification, so add to KnownPeers
             self._net_ovls[olid]["KnownPeers"][peer_id] = DiscoveredPeer(peer_id)
         if self.config["Overlays"][olid].get("Role", "Switch").casefold() == "leaf".casefold():
-            self.register_cbt("Logger", "LOG_INFO", "Rejected edge negotiation as config "
-                              "specifies leaf device")
+            self.register_cbt("Logger", "LOG_INFO", "Rejected edge negotiation, "
+                              "this leaf device is not accepting edge requests")
             edge_cbt.set_response("E6 - Not accepting incoming connections, leaf device", False)
             self.complete_cbt(edge_cbt)
             return
@@ -368,8 +368,7 @@ class Topology(ControllerModule, CFX):
             net_ovl["NewPeerCount"] = 0
             ovl_cfg = self.config["Overlays"][olid]
             self.register_cbt("Logger", "LOG_DEBUG", "Netbuilder initiating refresh ...")
-            enf_lnks = ovl_cfg.get("EnforcedLinks", {})
-            manual_topo = ovl_cfg.get("ManualTopology", False)
+            enf_lnks = ovl_cfg.get("EnforcedLinks", [])
             peer_list = [peer_id for peer_id in net_ovl["KnownPeers"] \
                 if net_ovl["KnownPeers"][peer_id].is_available]
             self.register_cbt("Logger", "LOG_DEBUG", "Peerlist for Netbuilder {0}"
@@ -379,6 +378,10 @@ class Topology(ControllerModule, CFX):
             max_ond = int(ovl_cfg.get("MaxOnDemandEdges", 2))
             num_peers = len(peer_list) if len(peer_list) > 1 else 2
             max_ldl = int(ovl_cfg.get("MaxLongDistEdges", math.floor(math.log(num_peers, 2))))
+            manual_topo = ovl_cfg.get("ManualTopology", False)
+            if self.config["Overlays"][olid].get("Role", "Switch").casefold() == \
+                "leaf".casefold():
+                manual_topo = True
             params = {"OverlayId": olid, "NodeId": self.node_id, "ManualTopology": manual_topo,
                       "EnforcedEdges": enf_lnks, "MaxSuccessors": max_succ,
                       "MaxLongDistEdges": max_ldl, "MaxOnDemandEdges": max_ond}

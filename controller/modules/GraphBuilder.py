@@ -34,7 +34,7 @@ class GraphBuilder():
         self._node_id = cfg["NodeId"]
         self._peers = None
         # enforced is a list of peer ids that should always have a direct edge
-        self._enforced = cfg.get("EnforcedEdges", {})
+        self._enforced = cfg.get("EnforcedEdges", [])
         # only create edges from the enforced list
         self._manual_topo = cfg.get("ManualTopology", False)
         self._max_successors = int(cfg["MaxSuccessors"])
@@ -114,14 +114,14 @@ class GraphBuilder():
         # Preserve existing long distance
         ldlnks = transition_adj_list.edges_bytype(["CETypeILongDistance"])
         for peer_id, ce in ldlnks.items():
-            if ce.edge_state in ("CEStateUnknown", "CEStateCreated", "CEStateConnected") and \
+            if ce.edge_state in ("CEStateInitialized", "CEStateCreated", "CEStateConnected") and \
                 peer_id not in adj_list:
                 adj_list[peer_id] = ConnectionEdge(peer_id, ce.edge_id, ce.edge_type)
 
         ldlnks = transition_adj_list.edges_bytype(["CETypeLongDistance"])
         num_existing_ldl = 0
         for peer_id, ce in ldlnks.items():
-            if ce.edge_state in ("CEStateUnknown", "CEStateCreated", "CEStateConnected") and \
+            if ce.edge_state in ("CEStateInitialized", "CEStateCreated", "CEStateConnected") and \
                 peer_id not in adj_list and not self.is_too_close(ce.peer_id):
                 adj_list[peer_id] = ConnectionEdge(peer_id, ce.edge_id, ce.edge_type)
                 num_existing_ldl += 1
@@ -139,7 +139,7 @@ class GraphBuilder():
         # add existing on demand links
         existing = transition_adj_list.edges_bytype(["CETypeOnDemand", "CETypeIOnDemand"])
         for peer_id, ce in existing.items():
-            if ce.edge_state in ("CEStateUnknown", "CEStateCreated", "CEStateConnected") and \
+            if ce.edge_state in ("CEStateInitialized", "CEStateCreated", "CEStateConnected") and \
                 peer_id not in adj_list:
                 ond[peer_id] = ConnectionEdge(peer_id, ce.edge_id, ce.edge_type)
         for task in request_list:
@@ -167,7 +167,7 @@ class GraphBuilder():
             self._build_long_dist_links(adj_list, transition_adj_list)
             self._build_ondemand_links(adj_list, transition_adj_list, request_list)
         for _, ce in adj_list.conn_edges.items():
-            assert ce.edge_state == "CEStateUnknown", "Invalid CE edge state, CE={}".format(ce)
+            assert ce.edge_state == "CEStateInitialized", "Invalid CE edge state, CE={}".format(ce)
         return adj_list
 
     def build_adj_list_ata(self,):
