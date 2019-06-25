@@ -19,6 +19,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 # THE SOFTWARE.
 import time
+import random
 try:
     import simplejson as json
 except ImportError:
@@ -30,8 +31,8 @@ EdgeTypesOut = ["CETypeUnknown", "CETypeEnforced", "CETypeSuccessor", "CETypeLon
                 "CETypeOnDemand"]
 EdgeTypesIn = ["CETypeUnknown", "CETypeIEnforced", "CETypePredecessor", "CETypeILongDistance",
                "CETypeIOnDemand"]
-EdgeStates = ["CEStateInitialized", "CEStateCreated", "CEStateConnected", "CEStateDisconnected",
-              "CEStateDeleting"]
+EdgeStates = ["CEStateInitialized", "CEStateAuthorized", "CEStateCreated", "CEStateConnected",
+              "CEStateDisconnected", "CEStateDeleting"]
 
 def transpose_edge_type(edge_type):
     et = EdgeTypesOut[0]
@@ -161,6 +162,7 @@ class ConnEdgeAdjacenctList():
         self.num_succi = 0
         self.num_ond = 0
         self.num_ondi = 0
+        self._ssq = random.randint(255, 9859919926)
 
     def __len__(self):
         return len(self.conn_edges)
@@ -196,6 +198,13 @@ class ConnEdgeAdjacenctList():
     def __iter__(self):
         return self.conn_edges.__iter__()
 
+    @property
+    def ssq(self):
+        return self._ssq
+
+    def ssq_incr(self):
+        self._ssq += 1
+
     def is_successor(self, peer_id):
         return bool(peer_id == self._successor_nid)
 
@@ -211,6 +220,7 @@ class ConnEdgeAdjacenctList():
     def add_connection_edge(self, ce):
         self.conn_edges[ce.peer_id] = ce
         self.update_closest()
+        self.ssq_incr()
         if ce.edge_type == "CETypeLongDistance":
             self.num_ldl += 1
         if ce.edge_type == "CETypeILongDistance":
@@ -228,6 +238,7 @@ class ConnEdgeAdjacenctList():
         ce = self.conn_edges.pop(peer_id, None)
         if peer_id in (self._successor_nid, self._predecessor_nid):
             self.update_closest()
+        self.ssq_incr()
         return ce
 
     def edges_bytype(self, edge_type):

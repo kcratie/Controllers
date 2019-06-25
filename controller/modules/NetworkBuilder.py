@@ -94,54 +94,49 @@ class NetworkBuilder():
         #self._create_oplist()
         #self._process_ops()
 
-    def update_edge_state(self, connection_event):
+    def update_edge_state(self, event):
         """
         Updates the connection edge's current state based on the provided event. The number of CEs
         not in the EdgeState CEStateConnected is used to limit the number of edges being
         constructed concurrently.
         """
-        peer_id = connection_event["PeerId"]
-        edge_id = connection_event["TunnelId"]
-        overlay_id = connection_event["OverlayId"]
+        peer_id = event["PeerId"]
+        edge_id = event["TunnelId"]
+        overlay_id = event["OverlayId"]
         #with self._lock:
-        if connection_event["UpdateType"] == "CREATING":
-            conn_edge = self._current_adj_list.conn_edges.get(peer_id, None)
-            if not conn_edge:
-                assert False, "CE={0} for incoming edge should have been pre negotiated!"\
-                    .format(edge_id)
-                # this happens when the neighboring peer initiates the connection bootstrap
-                #self._refresh_in_progress += 1
-                #conn_edge = ConnectionEdge(peer_id, None, "CETypePredecessor")
-                #self._current_adj_list[peer_id] = conn_edge
-            conn_edge.edge_state = "CEStateCreated"
-        elif connection_event["UpdateType"] == "REMOVED":
+        if event["UpdateType"] == "LnkEvAuthorized":
+            self._add_incoming_auth_conn_edge(peer_id)
+        elif event["UpdateType"] == "LnkEvDeauthorized":
+            ce = self._current_adj_list[peer_id]
+            assert ce.edge_state == "CEStateAuthorized", "Deauth CE={0}".format(ce)
             del self._current_adj_list[peer_id]
             self._refresh_in_progress -= 1
-        elif connection_event["UpdateType"] == "RemoveEdgeFailed":
-            # leave the node in the adj list and marked for removal to be retried.
-            # the retry occurs too quickly and causes too many attempts before it succeeds
-            self._refresh_in_progress -= 1
-            self._current_adj_list[peer_id].created_time = \
-                time.time() + NetworkBuilder._DEL_RETRY_INTERVAL
-        elif connection_event["UpdateType"] == "CONNECTED":
+        elif event["UpdateType"] == "LnkEvCreating":
+            conn_edge = self._current_adj_list.conn_edges.get(peer_id, None)
+            conn_edge.edge_state = "CEStateCreated"
+        elif event["UpdateType"] == "LnkEvConnected":
             self._current_adj_list[peer_id].edge_state = "CEStateConnected"
             self._current_adj_list[peer_id].connected_time = \
-                connection_event["ConnectedTimestamp"]
+                event["ConnectedTimestamp"]
             self._refresh_in_progress -= 1
-        elif connection_event["UpdateType"] == "DISCONNECTED":
+        elif event["UpdateType"] == "LnkEvDisconnected":
             # the local topology did not request removal of the connection
             self._top.top_log("CEStateDisconnected event recvd peer_id: {0}, edge_id: {1}".
                               format(peer_id, edge_id))
             self._current_adj_list[peer_id].edge_state = "CEStateDisconnected"
             self._refresh_in_progress += 1
             self._top.top_remove_edge(overlay_id, peer_id)
-        elif connection_event["UpdateType"] == "DEAUTHORIZED":
-            ce = self._current_adj_list[peer_id]
-            assert ce.edge_state == "CEStateInitialized", "Deauth CE={0}".format(ce)
+        elif event["UpdateType"] == "LnkEvRemoved":
             del self._current_adj_list[peer_id]
             self._refresh_in_progress -= 1
+        elif event["UpdateType"] == "RemoveEdgeFailed":
+            # leave the node in the adj list and marked for removal to be retried.
+            # the retry occurs too quickly and causes too many attempts before it succeeds
+            self._refresh_in_progress -= 1
+            self._current_adj_list[peer_id].created_time = \
+                time.time() + NetworkBuilder._DEL_RETRY_INTERVAL
         else:
-            self._top.top_log("Invalid UpdateType specified for connection update",
+            self._top.top_log("Invalid UpdateType specified for event",
                               level="LOG_WARNING")
         assert self._refresh_in_progress >= 0, "refresh in progress is negative {}"\
             .format(self._refresh_in_progress)
@@ -191,14 +186,14 @@ class NetworkBuilder():
                 break
             rmv_list.append(peer_id)
             ce = self._pending_adj_list[peer_id]
-            if ce.edge_type == "CETypeOnDemand" and \
-                self._current_adj_list.num_ldl >= self._current_adj_list.max_ldl:
-                continue
+            #if ce.edge_type == "CETypeLongDistance" and \
+            #    self._current_adj_list.num_ldl >= self._current_adj_list.max_ldl:
+            #    continue
             if peer_id in self._negotiated_edges:  # an edge has already been negotiated
                 continue
             if peer_id not in self._current_adj_list:
-                assert ce.edge_state == "CEStateInitialized", \
-                    "State!=CEStateInitialized CE={0}".format(ce)
+                #assert ce.edge_state == "CEStateInitialized", \
+                #    "State!=CEStateInitialized CE={0}".format(ce)
                 self._current_adj_list[peer_id] = ce
                 nego_list.append(ce)
         for peer_id in rmv_list:
@@ -291,10 +286,11 @@ class NetworkBuilder():
                               format(ce, self._negotiated_edges))
         return edge_resp
 
-    def add_incoming_auth_conn_edge(self, peer_id):
+    def _add_incoming_auth_conn_edge(self, peer_id):
         """ Role B2 """
         self._refresh_in_progress += 1
         ce = self._negotiated_edges.pop(peer_id)
+        ce.edge_state = "CEStateAuthorized"
         self._current_adj_list.add_connection_edge(ce)
 
     def complete_edge_negotiation(self, edge_nego):
@@ -310,20 +306,20 @@ class NetworkBuilder():
         peer_id = edge_nego.recipient_id
         edge_id = edge_nego.edge_id
 
-        ce = self._negotiated_edges.get(edge_nego.recipient_id, None)
+        ce = self._negotiated_edges.pop(edge_nego.recipient_id, None)
         if not ce:
             ce = self._current_adj_list[edge_nego.recipient_id]
-            if not edge_nego.is_accepted:
+        if not edge_nego.is_accepted:
+            self._refresh_in_progress -= 1
+            # if E2 (request superceeded) do nothing here. The corresponding CE instance will
+            # be converted in resolve_collision_request().
+            if edge_nego.data[:2] != "E2":
+                del self._current_adj_list[peer_id]
+        else:
+            if ce.edge_id != edge_nego.edge_id:
+                self._top.top_log("EdgeNego parameters does not match current adjacency list, "
+                                    "The transaction has been discarded.", "LOG_ERROR")
+                del self._current_adj_list[ce.peer_id]
                 self._refresh_in_progress -= 1
-                # if E2 (request superceeded) do nothing here. The coreesponding CE instance will
-                # be converted in resolve_collision_request().
-                if edge_nego.data[:2] != "E2":
-                    del self._current_adj_list[peer_id]
             else:
-                if ce.edge_id != edge_nego.edge_id:
-                    self._top.top_log("EdgeNego parameters does not match current adjacency list, "
-                                      "The transaction has been discarded.", "LOG_ERROR")
-                    del self._current_adj_list[ce.peer_id]
-                    self._refresh_in_progress -= 1
-                else:
-                    self._top.top_add_edge(self._current_adj_list.overlay_id, peer_id, edge_id)
+                self._top.top_add_edge(self._current_adj_list.overlay_id, peer_id, edge_id)

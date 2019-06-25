@@ -84,10 +84,6 @@ CONFIG = {
     "BridgeController": {
         "Enabled": True,
         "Dependencies": ["Logger", "LinkManager"]
-    },
-    "SDNInterface": {
-        "Enabled": True,
-        "Dependencies": ["Logger", "Topology"]
     }
 }
 

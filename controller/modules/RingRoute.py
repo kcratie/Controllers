@@ -41,8 +41,8 @@ from ryu.lib import hub
 from ryu.lib import mac as mac_lib
 from ryu.topology import event, switches
 from ryu.topology.api import get_switch
-from NetworkGraph import ConnectionEdge
-from NetworkGraph import ConnEdgeAdjacenctList
+#from NetworkGraph import ConnectionEdge
+#from NetworkGraph import ConnEdgeAdjacenctList
 
 CONFIG = {
     "OverlayId": "101000F",
@@ -57,7 +57,7 @@ class netNode():
         self.datapath = datapath
         self.addr = (datapath.address[0], netNode.SDNI_PORT)
         self.node_id = None
-        self.topo = None
+        #self.topo = None
         self._leaf_prts = None
         self.switch = None
         self.links = {} # maps port no to tuple (local_mac, peer_mac, peer_id)
@@ -69,9 +69,8 @@ class netNode():
         self.update_node_id()
 
     def __repr__(self):
-        return ("node_id=%s, node_address=%s:%s, datapath_id=0x%016x, switch=%s, topo=%s" %
-                (self.node_id[:7], self.addr[0], self.addr[1], self.datapath.id, str(self.switch),
-                 self.topo))
+        return ("node_id=%s, node_address=%s:%s, datapath_id=0x%016x, switch=%s" %
+                (self.node_id[:7], self.addr[0], self.addr[1], self.datapath.id, str(self.switch)))
 
     def __str__(self):
         msg = ("netNode<{0}\nLink={1}, LeafPorts={2}>"
@@ -103,6 +102,13 @@ class netNode():
         link_item = self.links.get(port_no, (None, None, None))
         return link_item[2]
 
+    @property
+    def peer_list(self):
+        pl = []
+        for entry in self.mac_local_to_peer.values():
+            pl.append(entry[1])
+        return pl
+
     def update(self):
         if not self.node_id:
             self.update_node_id()
@@ -124,22 +130,20 @@ class netNode():
         req = dict(Request=dict(Action="GetTunnels", Params={"OverlayId": olid}))
         resp = self._send_recv(self.addr, req)
         if resp and resp["Response"]["Status"]:
-            topo = resp["Response"]["Data"].get(olid, None)
+            topo = resp["Response"]["Data"]
             if not topo:
                 self.logger.info("- No IPOP Topo data available as yet")
                 return # nothing created in ipop as yet
-            self.topo = ConnEdgeAdjacenctList(olid, self.node_id)
             self.mac_local_to_peer.clear()
-            for peer_id in topo:
-                ce = ConnectionEdge.from_json_str(json.dumps(topo[peer_id]))
-                self.topo.add_connection_edge(ce)
-                local = topo[peer_id]["MAC"]
-                peer_mac = topo[peer_id]["PeerMac"]
+            for tnlid in topo:
+                local = topo[tnlid]["MAC"]
+                peer_mac = topo[tnlid]["PeerMac"]
+                peer_id = topo[tnlid]["PeerId"]
                 self.mac_local_to_peer[local] = (peer_mac, peer_id)
+
             self.logger.info("+ Updated mac_local_to_peer %s", self.mac_local_to_peer)
-            self.logger.info("+ Updated ipop topo %s", self.topo)
         else:
-            self.logger.warning("- Failed for to update topo for node:%s dpid:%s",
+            self.logger.warning("- Failed to update topo for node:%s dpid:%s",
                                 self.node_id, self.datapath.id)
 
     def update_links(self):
@@ -151,7 +155,6 @@ class netNode():
         self.logger.info("+ Updated links %s", self.links)
 
     def update_leaf_ports(self):
-        #self._leaf_prts = set([pt.port_no for pt in self.switch.ports]) - set([*self.links.keys()])
         self._leaf_prts = set(pt.port_no for pt in self.switch.ports \
             if pt.port_no not in self.links)
         self.logger.info("+ Updated leaf ports: %s", str(self._leaf_prts))
@@ -161,8 +164,7 @@ class netNode():
         prt = switches.Port(self.datapath.id, self.datapath.ofproto, ofpport)
         self.switch.ports.remove(prt)
         td = self.links.get(port_no)
-        if td and self.topo:
-            self.topo.remove_connection_edge(td[2])
+        if td:
             self.mac_local_to_peer.pop(td[0], None)
         self.links.pop(port_no, None)
         self.update_leaf_ports()
@@ -232,37 +234,47 @@ class PeerSwitch():
 class LearningTable():
     def __init__(self, ryu):
         self._dpid = None
-        self._nid = None            # local node id
-        self.ingress_tbl = {}       # the last observed ingress for the src mac (index)
-        self._leaf_ports = set()    # provided by net node
-        self.rootsw_tbl = {}        # table of root switches (index:nid) tracks switch leaf devices
-        self.peersw_tbl = {}        # table of leaf mac to host PeerSwitch
+        self._nid = None         # local node id
+        self.ingress_tbl = {}    # the last observed ingress for the src mac (index)
+        self._leaf_ports = set() # provided by net node
+        self.peersw_tbl = {}     # table of peer switches (index: peer sw node id)
+        self.rootsw_tbl = {}     # table of leaf mac to host root switch
         self.logger = ryu.logger
-        self._ts = time.time() + 60
+        self._ts_tbl = {}        # used to expire old leaf entries
 
     def __contains__(self, key_mac):
         return self.ingress_tbl.__contains__(key_mac)
 
     def __repr__(self):
-        state = "dpid={0}, nid={1}, ingress_tbl={2}, leaf_ports={3}, rootsw_tbl={4}, peersw_tbl={5}"\
-                .format(self._dpid, self._nid, self.ingress_tbl, self.leaf_ports, self.rootsw_tbl,
-                        self.peersw_tbl)
+        state = "dpid={0}, nid={1}, ingress_tbl={2}, leaf_ports={3}, peersw_tbl={4}, rootsw_tbl={5}"\
+                .format(self._dpid, self._nid, self.ingress_tbl, self.leaf_ports, self.peersw_tbl,
+                        self.rootsw_tbl)
         return state
 
     def __str__(self):
         return str("LearningTable<{}>".format(self.__repr__()))
 
     def __getitem__(self, key_mac):
-        """ return the best egress to reach the given mac """
-        psw = self.peersw_tbl.get(key_mac)
+        # lazy removal of expired entries
+        now = time.time()
+        ts = self._ts_tbl.get(key_mac, None)
+        if ts:
+            if ts <= now - 60:
+                self.ingress_tbl.pop(key_mac, None)
+                rsw = self.rootsw_tbl.pop(key_mac, None)
+                if rsw:
+                    rsw.leaf_macs.discard(key_mac)
+                return None
+            else:
+                self._ts_tbl[key_mac] = now
+        # return the best egress to reach the given mac
+        psw = self.rootsw_tbl.get(key_mac)
         if psw and psw.port_no:
             return psw.port_no
         return self.ingress_tbl.get(key_mac, None)
 
     def __setitem__(self, key_mac, value):
-        if self._ts < time.time():
-            self.forget()
-            self._ts = time.time() + 30
+        self._ts_tbl[key_mac] = time.time()
         if isinstance(value, tuple):
             self.learn(src_mac=key_mac, in_port=value[0], rnid=value[1])
         else:
@@ -271,7 +283,9 @@ class LearningTable():
     def __delitem__(self, key_mac):
         """ Remove the MAC address """
         self.ingress_tbl.pop(key_mac, None)
-        self.peersw_tbl.pop(key_mac, None)
+        rsw = self.rootsw_tbl.pop(key_mac, None)
+        if rsw:
+            rsw.leaf_macs.discard(key_mac)
 
     @property
     def dpid(self):
@@ -288,13 +302,13 @@ class LearningTable():
     @node_id.setter
     def node_id(self, nid):
         self._nid = nid
-        self.rootsw_tbl[nid] = PeerSwitch(nid)
+        self.peersw_tbl[nid] = PeerSwitch(nid)
 
     @property
     def local_leaf_macs(self):
         if not self._nid:
             return None
-        return self.rootsw_tbl[self._nid].leaf_macs
+        return self.peersw_tbl[self._nid].leaf_macs
 
     @property
     def leaf_ports(self):
@@ -311,45 +325,45 @@ class LearningTable():
         """
         self.ingress_tbl[src_mac] = in_port
         if in_port in self.leaf_ports:
-            self.rootsw_tbl[self._nid].leaf_macs.add(src_mac)
+            self.peersw_tbl[self._nid].leaf_macs.add(src_mac)
         elif rnid:
-            if rnid not in self.rootsw_tbl:
-                self.rootsw_tbl[rnid] = PeerSwitch(rnid)
-            self.rootsw_tbl[rnid].leaf_macs.add(src_mac)
-            self.peersw_tbl[src_mac] = self.rootsw_tbl[rnid]
+            if rnid not in self.peersw_tbl:
+                self.peersw_tbl[rnid] = PeerSwitch(rnid)
+            self.peersw_tbl[rnid].leaf_macs.add(src_mac)
+            self.rootsw_tbl[src_mac] = self.peersw_tbl[rnid]
 
     def leaf_to_peersw(self, leaf_mac):
-        return self.peersw_tbl.get(leaf_mac)
+        return self.rootsw_tbl.get(leaf_mac)
 
     def forget(self):
         """ Removes learning table entries associated with port no """
         self.ingress_tbl.clear()
-        self.peersw_tbl.clear()
+        self.rootsw_tbl.clear()
 
     def register_peer_switch(self, peer_id, in_port):
         """ Track the adjacent switch and the port no """
         if peer_id:
-            if peer_id not in self.rootsw_tbl:
-                self.rootsw_tbl[peer_id] = PeerSwitch(peer_id)
-            self.rootsw_tbl[peer_id].port_no = in_port
+            if peer_id not in self.peersw_tbl:
+                self.peersw_tbl[peer_id] = PeerSwitch(peer_id)
+            self.peersw_tbl[peer_id].port_no = in_port
 
     def unregister_peer_switch(self, peer_id):
         """
         Clear port_no to indicate the tunnel is removed, ie., switch is no longer adjacent
         although it may be accessible via hops.
         """
-        if peer_id and peer_id in self.rootsw_tbl:
-            self.rootsw_tbl[peer_id].port_no = None
+        if peer_id and peer_id in self.peersw_tbl:
+            self.peersw_tbl[peer_id].port_no = None
 
     def remote_leaf_macs(self, rnid):
-        return self.rootsw_tbl[rnid]
+        return self.peersw_tbl[rnid]
 
     def clear(self):
         self._dpid = None
         self._nid = None
         self.ingress_tbl.clear()
         self.leaf_ports.clear()
-        self.rootsw_tbl.clear()
+        self.peersw_tbl.clear()
 
 ###################################################################################################
 ###################################################################################################
@@ -486,15 +500,17 @@ class RingRoute(app_manager.RyuApp):
         while True:
             msg = str("@@>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>\n")
             for dpid in self.nodes:
-                thc = 0
-                nrsw = 0
-                for rsw in self.lt.rootsw_tbl.values():
+                total_hc = 0
+                num_rsw = 0
+                for rsw in self.lt.peersw_tbl.values():
                     if rsw.hop_count > 0:
-                        thc += rsw.hop_count
-                        nrsw += 1
-                if nrsw == 0:
-                    nrsw = 1
-                self.nodes[dpid].counters["AvgFloodingHopCount"] = thc/nrsw
+                        # The host bridge is counted as a hop.
+                        # However, for the number routing hops it should not be included.
+                        total_hc += (rsw.hop_count - 1)
+                        num_rsw += 1
+                if num_rsw == 0:
+                    num_rsw = 1
+                self.nodes[dpid].counters["AvgFloodingHopCount"] = total_hc/num_rsw
                 self.request_stats(self.nodes[dpid].datapath)
                 msg += "{0}\n".format(self.nodes[dpid])
                 msg += "{0}\n".format(str(self.lt))
@@ -681,7 +697,7 @@ class RingRoute(app_manager.RyuApp):
             self.update_leaf_macs_and_flows(datapath, rcvd_frb.root_nid, payload,
                                             rcvd_frb.pl_count, in_port)
         else:
-            self.lt.rootsw_tbl[rcvd_frb.root_nid].hop_count = rcvd_frb.hop_count
+            self.lt.peersw_tbl[rcvd_frb.root_nid].hop_count = rcvd_frb.hop_count
             if rcvd_frb.hop_count > self.nodes[dpid].counters.get("MaxFloodingHopCount", 1):
                 self.nodes[dpid].counters["MaxFloodingHopCount"] = rcvd_frb.hop_count
             # deliver the broadcast frame to leaf devices
@@ -703,11 +719,11 @@ class RingRoute(app_manager.RyuApp):
                 self.do_bounded_flood(datapath, in_port, out_bounds, src, payload)
 
     def update_leaf_macs_and_flows(self, datapath, rnid, macs, num_items, ingress):
-        self.lt.rootsw_tbl[rnid].leaf_macs.clear()
+        self.lt.peersw_tbl[rnid].leaf_macs.clear()
         mlen = num_items*6
         for mactup in struct.iter_unpack("!6s", macs[:mlen]):
             macstr = mac_lib.haddr_to_str(mactup[0])
-            self.lt.rootsw_tbl[rnid].leaf_macs.add(macstr)
+            self.lt.peersw_tbl[rnid].leaf_macs.add(macstr)
         for mac in self.lt.remote_leaf_macs(rnid).leaf_macs:
             self.update_flow_match_dstmac(datapath, mac, ingress, tblid=0)
 
@@ -792,7 +808,7 @@ class FloodingBounds():
         if not exclude_ports:
             exclude_ports = []
         out_bounds = []
-        node_list = [*self._net_node.topo.conn_edges.keys()]
+        node_list = self._net_node.peer_list
         my_nid = self._net_node.node_id
         node_list.append(my_nid)
         node_list.sort()

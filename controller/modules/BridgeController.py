@@ -20,8 +20,13 @@
 # THE SOFTWARE.
 
 
-from abc import ABCMeta, abstractmethod
+try:
+    import simplejson as json
+except ImportError:
+    import json
 import threading
+import socketserver
+from abc import ABCMeta, abstractmethod
 from distutils import spawn
 import controller.framework.ipoplib as ipoplib
 from controller.framework.ControllerModule import ControllerModule
@@ -66,7 +71,7 @@ class BridgeABC():
     def __str__(self):
         """ Return a string of the bridge name. """
         return self.__repr__()
-
+###################################################################################################
 
 class OvsBridge(BridgeABC):
     brctl = spawn.find_executable("ovs-vsctl")
@@ -151,6 +156,7 @@ class OvsBridge(BridgeABC):
 
     def get_patch_port_name(self):
         return self._patch_port
+###################################################################################################
 
 class LinuxBridge(BridgeABC):
     brctl = spawn.find_executable("brctl")
@@ -219,16 +225,76 @@ class LinuxBridge(BridgeABC):
         """ Set port priority value. """
         ipoplib.runshell([LinuxBridge.brctl,
                           "setportprio", self.name, port, str(prio)])
+###################################################################################################
+class SDNITCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
+    def __init__(self, host_port_tuple, streamhandler, sdni):
+        super().__init__(host_port_tuple, streamhandler)
+        self.sdni = sdni
 
+class SDNIRequestHandler(socketserver.BaseRequestHandler):
+    def handle(self):
+        data = self.request.recv(65536)
+        if not data:
+            return
+        task = json.loads(data.decode("utf-8"))
+        task = self.process_task(task)
+        # todo: send response length as a prefix
+        self.request.sendall(bytes(json.dumps(task) + "\n", "utf-8"))
+
+    def process_task(self, task):
+        # task structure
+        # dict(Request=dict(Action=None, Params=None),
+        #      Response=dict(Status=False, Data=None))
+        if task["Request"]["Action"] == "GetTunnels":
+            task = self._handle_get_topo(task)
+        elif task["Request"]["Action"] == "GetNodeId":
+            task["Response"] = dict(Status=True,
+                                    Data=dict(NodeId=str(self.server.sdni.node_id)))
+        elif task["Request"]["Action"] == "TunnelRquest":
+            task["Response"] = dict(Status=True,
+                                    Data=dict(StatusMsg="Request shall be considered"))
+            self.server.sdni.log("LOG_DEBUG", "On-demand request recvd %s", task["Request"])
+            self.server.sdni.sdn_tunnel_request(task["Request"]["Params"]) # op is ADD/REMOVE
+        else:
+            self.server.sdni.log("LOG_WARNING", "An unrecognized SDNI task was discarded %s",
+                                 task)
+            task["Response"] = dict(Status=False, Data=dict(ErrorMsg="Unsupported request"))
+        return task
+
+    def _handle_get_topo(self, task):
+        status = False
+        olid = task["Request"]["Params"]["OverlayId"]
+        topo = self.server.sdni.get_ovl_topo(olid)
+        if topo:
+            status = True
+        task["Response"] = dict(Status=status, Data=topo)
+        return task
+
+
+###################################################################################################
 
 class BridgeController(ControllerModule):
     def __init__(self, cfx_handle, module_config, module_name):
         super(BridgeController, self).__init__(cfx_handle, module_config, module_name)
+        self._server = None
+        self._server_thread = None
+        #self._adj_lists = dict()
+        #self._is_updating = False
+
         self._ovl_net = dict()
         self._guest = dict()
         self._lock = threading.Lock()
+        self._tunnels = dict()
 
     def initialize(self):
+        self._server = SDNITCPServer(
+            (self._cm_config["SdnListenAddress"], self._cm_config["SdnListenPort"]),
+            SDNIRequestHandler, self)
+        self._server_thread = threading.Thread(target=self._server.serve_forever,
+                                               name="SDNITCPServer")
+        self._server_thread.setDaemon(True)
+        self._server_thread.start()
+
         ign_br_names = dict()
         for olid in self.overlays:
             br_cfg = self.overlays[olid]
@@ -276,26 +342,34 @@ class BridgeController(ControllerModule):
         try:
             olid = cbt.request.params["OverlayId"]
             br = self._ovl_net[olid]
-            if cbt.request.params["UpdateType"] == "CONNECTED":
+            tnlid = cbt.request.params["TunnelId"]
+            if cbt.request.params["UpdateType"] == "LnkEvConnected":
+                if olid not in self._tunnels:
+                    self._tunnels[olid] = dict()
                 port_name = cbt.request.params["TapName"]
+                self._tunnels[olid][tnlid] = {
+                    "PeerId": cbt.request.params["PeerId"],
+                    "TunnelId": tnlid,
+                    "ConnectedTimestamp": cbt.request.params["ConnectedTimestamp"],
+                    "TapName": port_name,
+                    "MAC": ipoplib.delim_mac_str(cbt.request.params["MAC"]),
+                    "PeerMac": ipoplib.delim_mac_str(cbt.request.params["PeerMac"])
+                    }
                 br.add_port(port_name)
-                self.register_cbt(
-                    "Logger", "LOG_INFO", "Port {0} added to bridge {1}"
-                    .format(port_name, str(br)))
-            elif cbt.request.params["UpdateType"] == "REMOVED":
+                self.log("LOG_INFO", "Port %s added to bridge %s", port_name, str(br))
+            elif cbt.request.params["UpdateType"] == "LnkEvRemoved":
+                self._tunnels[olid].pop(tnlid, None)
                 if br.bridge_type == OvsBridge.bridge_type:
                     port_name = cbt.request.params.get("TapName")
                     if port_name:
                         br.del_port(port_name)
-                        self.register_cbt(
-                            "Logger", "LOG_INFO", "Port {0} removed from bridge {1}"
-                            .format(port_name, str(br)))
+                        self.log("LOG_INFO", "Port %s removed from bridge %s", port_name, str(br))
         except RuntimeError as err:
             self.register_cbt("Logger", "LOG_WARNING", str(err))
         cbt.set_response(None, True)
         self.complete_cbt(cbt)
 
-    def resp_handler_(self, cbt):
+    def timer_method(self):
         pass
 
     def process_cbt(self, cbt):
@@ -319,15 +393,13 @@ class BridgeController(ControllerModule):
                 parent_cbt.set_response(cbt_data, cbt_status)
                 self.complete_cbt(parent_cbt)
 
-    def timer_method(self):
-        pass
-
     def terminate(self):
         try:
+            self._server.shutdown()
+            self._server.server_close()
             for olid in self._ovl_net:
                 self._guest[olid].del_br()
                 br = self._ovl_net[olid]
-
                 if self.overlays[olid].get("AutoDelete", False):
                     br.del_br()
                 else:
@@ -368,3 +440,7 @@ class BridgeController(ControllerModule):
         gbr.add_patch_port(self._ovl_net[olid].get_patch_port_name())
         self._ovl_net[olid].add_patch_port(gbr.get_patch_port_name())
         return name
+
+
+    def get_ovl_topo(self, overlay_id):
+        return self._tunnels.get(overlay_id, None)

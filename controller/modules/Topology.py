@@ -177,17 +177,28 @@ class Topology(ControllerModule, CFX):
         params = cbt.request.params
         olid = params["OverlayId"]
         peer_id = params["PeerId"]
-        self._net_ovls[olid]["NetBuilder"].update_edge_state(params)
-        if params["UpdateType"] == "DISCONNECTED" or params["UpdateType"] == "DEAUTHORIZED":
+        if params["UpdateType"] == "LnkEvAuthorized":
+            disc = self._net_ovls[olid]["KnownPeers"].get(peer_id)
+            if not disc:
+                disc = DiscoveredPeer(peer_id)
+                self._net_ovls[olid]["KnownPeers"][peer_id] = disc
+            disc.presence()
+        elif params["UpdateType"] == "LnkEvCreating":
+            pass
+        elif params["UpdateType"] == "LnkEvConnected":
+            self._net_ovls[olid]["KnownPeers"][peer_id].restore()
+            self._do_topo_change_post(olid)
+        elif params["UpdateType"] == "LnkEvDisconnected" or \
+            params["UpdateType"] == "LnkEvDeauthorized":
             self._net_ovls[olid]["KnownPeers"][peer_id].exclude()
             self.top_log("Excluding peer {0} until {1}".
                          format(peer_id, datetime.fromtimestamp(
                              self._net_ovls[olid]["KnownPeers"][peer_id].available_time)))
-        if params["UpdateType"] == "REMOVED":
+        elif params["UpdateType"] == "LnkEvRemoved":
             self._do_topo_change_post(olid)
-        elif params["UpdateType"] == "CONNECTED":
-            self._net_ovls[olid]["KnownPeers"][peer_id].restore()
-            self._do_topo_change_post(olid)
+        else:
+            self.log("LOG_WARNING", "Unknown link update type: %s", params["UpdateType"])
+        self._net_ovls[olid]["NetBuilder"].update_edge_state(params)
         self._update_overlay(olid)
         cbt.set_response(None, True)
         self.complete_cbt(cbt)
@@ -247,10 +258,11 @@ class Topology(ControllerModule, CFX):
         peer_id = cbt.request.params["PeerId"]
         if cbt.response.status:
             _, edge_resp = self._net_ovls[olid]["NegoConnEdges"].pop(peer_id)
-            self._net_ovls[olid]["NetBuilder"].add_incoming_auth_conn_edge(peer_id)
+            # self._net_ovls[olid]["NetBuilder"].add_incoming_auth_conn_edge(peer_id)
         else:
             self._net_ovls[olid]["NegoConnEdges"].pop(peer_id)
-            edge_resp = EdgeResponse("E4 - Tunnel service unavailable", False)
+            edge_resp = EdgeResponse("E4 - Tunnel nego failed {0}"
+                                     .format(cbt.response.data), False)
         nego_cbt = cbt.parent
         self.free_cbt(cbt)
         nego_cbt.set_response(edge_resp.data, edge_resp.is_accepted)

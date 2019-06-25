@@ -28,15 +28,25 @@ import socketserver
 from controller.framework.ControllerModule import ControllerModule
 import controller.framework.ipoplib as ipoplib
 
+class SDNITCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
+    def __init__(self, host_port_tuple, streamhandler, sdni):
+        super().__init__(host_port_tuple, streamhandler)
+        self.sdni = sdni
+
 class SDNIRequestHandler(socketserver.BaseRequestHandler):
     def handle(self):
-        # task structure
-        # dict(Request=dict(Action=None, Params=None),
-        #      Response=dict(Status=False, Data=None))
         data = self.request.recv(65536)
         if not data:
             return
         task = json.loads(data.decode("utf-8"))
+        task = self.process_task(task)
+        # todo: send response length as a prefix
+        self.request.sendall(bytes(json.dumps(task) + "\n", "utf-8"))
+
+    def process_task(self, task):
+        # task structure
+        # dict(Request=dict(Action=None, Params=None),
+        #      Response=dict(Status=False, Data=None))
         if task["Request"]["Action"] == "GetTunnels":
             task = self._handle_get_topo(task)
         elif task["Request"]["Action"] == "GetNodeId":
@@ -51,8 +61,8 @@ class SDNIRequestHandler(socketserver.BaseRequestHandler):
             self.server.sdni.sdn_log("An unrecognized SDNI task request was discarded {0}".
                                      format(task), "LOG_WARNING")
             task["Response"] = dict(Status=False, Data=dict(ErrorMsg="Unsupported request"))
-        # todo: send response length as a prefix
-        self.request.sendall(bytes(json.dumps(task) + "\n", "utf-8"))
+        return task
+
 
     def _handle_get_topo(self, task):
         status = False
@@ -62,74 +72,64 @@ class SDNIRequestHandler(socketserver.BaseRequestHandler):
         task["Response"] = dict(Status=status, Data=topo)
         return task
 
-class SDNITCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
-    def __init__(self, host_port_tuple, streamhandler, sdni):
-        super().__init__(host_port_tuple, streamhandler)
-        self.sdni = sdni
-
 class SDNInterface(ControllerModule):
     def __init__(self, cfx_handle, module_config, module_name):
-        super(SDNInterface, self).__init__(cfx_handle, module_config,
-                                           module_name)
-        self._server = dict()
-        self._server_thread = dict()
+        super(SDNInterface, self).__init__(cfx_handle, module_config, module_name)
+        self._server = None
+        self._server_thread = None
         self._lock = threading.Lock()
         self._adj_lists = dict()
         self._is_updating = False
 
     def initialize(self):
-        self._cfx_handle.start_subscription("Topology", "TOP_TOPOLOGY_CHANGE")
-        for olid in self._cm_config["Overlays"]:
-            self._server[olid] = SDNITCPServer(
-                (self._cm_config["Overlays"][olid]["SdnListenAddress"],
-                 self._cm_config["Overlays"][olid]["SdnListenPort"]), SDNIRequestHandler, self)
-            self._server_thread[olid] = threading.Thread(target=self._server[olid].serve_forever,
-                                                         name="SDNITCPServer")
-            self._server_thread[olid].setDaemon(True)
-            self._server_thread[olid].start()
-            self._adj_lists[olid] = dict()
+        #self._cfx_handle.start_subscription("Topology", "TOP_TOPOLOGY_CHANGE")
+        self._server = SDNITCPServer(
+            (self._cm_config["SdnListenAddress"], self._cm_config["SdnListenPort"]),
+            SDNIRequestHandler, self)
+        self._server_thread = threading.Thread(target=self._server.serve_forever,
+                                               name="SDNITCPServer")
+        self._server_thread.setDaemon(True)
+        self._server_thread.start()
+            #self._adj_lists[olid] = dict()
         self.register_cbt("Logger", "LOG_INFO", "Module loaded")
 
-    def req_handler_topology_change(self, cbt):
-        olid = cbt.request.params["OverlayId"]
-        if not olid in self._adj_lists:
-            return # not tracking this overlay
-        self.register_cbt("LinkManager", "LNK_QUERY_TUNNEL_INFO")
-        with self._lock:
-            self._is_updating = True
-            self._adj_lists[olid] = cbt.request.params["Topology"]
-        cbt.set_response(None, True)
-        self.complete_cbt(cbt)
+    #def req_handler_topology_change(self, cbt):
+    #    olid = cbt.request.params["OverlayId"]
+    #    if not olid in self._adj_lists:
+    #        return # not tracking this overlay
+    #    self.register_cbt("LinkManager", "LNK_QUERY_TUNNEL_INFO")
+    #    with self._lock:
+    #        self._is_updating = True
+    #        self._adj_lists[olid] = cbt.request.params["Topology"]
+    #    cbt.set_response(None, True)
+    #    self.complete_cbt(cbt)
 
-    def resp_handler_tunnel_info(self, cbt):
-        if not cbt.response.status:
-            self.free_cbt(cbt)
-            self._is_updating = False
-            return
-        resp_data = cbt.response.data
-        discard = []
-        with self._lock:
-            for olid in self._adj_lists:
-                for peer_id in self._adj_lists[olid]:
-                    tnlid = self._adj_lists[olid][peer_id]["edge_id"]
-                    if not resp_data.get(tnlid, None):
-                        discard.append((olid, peer_id))
-                    else:
-                        self._adj_lists[olid][peer_id]["MAC"] = ipoplib.delim_mac_str(
-                            resp_data[tnlid]["MAC"])
-                        self._adj_lists[olid][peer_id]["PeerMac"] = ipoplib.delim_mac_str(
-                            resp_data[tnlid]["PeerMac"])
-            for olid, peer_id in discard:
-                self._adj_lists[olid].pop(peer_id)
-            self._is_updating = False
-        self.free_cbt(cbt)
+    #def resp_handler_tunnel_info(self, cbt):
+    #    if not cbt.response.status:
+    #        self.free_cbt(cbt)
+    #        self._is_updating = False
+    #        return
+    #    resp_data = cbt.response.data
+    #    discard = []
+    #    with self._lock:
+    #        for olid in self._adj_lists:
+    #            for peer_id in self._adj_lists[olid]:
+    #                tnlid = self._adj_lists[olid][peer_id]["edge_id"]
+    #                if not resp_data.get(tnlid, None):
+    #                    discard.append((olid, peer_id))
+    #                else:
+    #                    self._adj_lists[olid][peer_id]["MAC"] = ipoplib.delim_mac_str(
+    #                        resp_data[tnlid]["MAC"])
+    #                    self._adj_lists[olid][peer_id]["PeerMac"] = ipoplib.delim_mac_str(
+    #                        resp_data[tnlid]["PeerMac"])
+    #        for olid, peer_id in discard:
+    #            self._adj_lists[olid].pop(peer_id)
+    #        self._is_updating = False
+    #    self.free_cbt(cbt)
 
     def process_cbt(self, cbt):
         if cbt.op_type == "Request":
-            if cbt.request.action == "TOP_TOPOLOGY_CHANGE":
-                self.req_handler_topology_change(cbt)
-            else:
-                self.req_handler_default(cbt)
+            self.req_handler_default(cbt)
         elif cbt.op_type == "Response":
             if cbt.request.action == "LNK_QUERY_TUNNEL_INFO":
                 self.resp_handler_tunnel_info(cbt)
@@ -146,9 +146,8 @@ class SDNInterface(ControllerModule):
         pass
 
     def terminate(self):
-        for olid in self._cm_config["Overlays"]:
-            self._server[olid].shutdown()
-            self._server[olid].server_close()
+        self._server.shutdown()
+        self._server.server_close()
 
     def sdn_log(self, msg, level="LOG_DEBUG"):
         self.register_cbt("Logger", level, msg)
@@ -156,21 +155,21 @@ class SDNInterface(ControllerModule):
     def sdn_get_node_id(self):
         return self.node_id
 
-    def sdn_get_node_topo(self):
-        tries = 0
-        topo = None
-        self._lock.acquire()
-        while self._is_updating and tries < 3:
-            tries += 1
-            self._lock.release()
-            time.sleep(1)
-            self._lock.acquire()
-        if self._is_updating:
-            self._lock.release()
-            return topo
-        topo = self._adj_lists
-        self._lock.release()
-        return topo
+    #def sdn_get_node_topo(self):
+    #    tries = 0
+    #    topo = None
+    #    self._lock.acquire()
+    #    while self._is_updating and tries < 3:
+    #        tries += 1
+    #        self._lock.release()
+    #        time.sleep(1)
+    #        self._lock.acquire()
+    #    if self._is_updating:
+    #        self._lock.release()
+    #        return topo
+    #    topo = self._adj_lists
+    #    self._lock.release()
+    #    return topo
 
-    def sdn_tunnel_request(self, req_params):
-        self.register_cbt("Topology", "TOP_REQUEST_OND_TUNNEL", req_params)
+    #def sdn_tunnel_request(self, req_params):
+    #    self.register_cbt("Topology", "TOP_REQUEST_OND_TUNNEL", req_params)
