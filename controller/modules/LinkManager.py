@@ -817,10 +817,10 @@ class LinkManager(ControllerModule):
         parent_cbt = cbt.parent
         resp_data = cbt.response.data
         if not cbt.response.status:
-            lnkid = cbt.request.params["LinkId"]
-            self._rollback_link_creation_changes(lnkid)
             self.register_cbt("Logger", "LOG_WARNING", "Create link endpoint failed :{}"
                               .format(cbt))
+            lnkid = cbt.request.params["LinkId"]
+            self._rollback_link_creation_changes(lnkid)
             self.free_cbt(cbt)
             parent_cbt.set_response(resp_data, False)
             self.complete_cbt(parent_cbt)
@@ -1010,13 +1010,18 @@ class LinkManager(ControllerModule):
         self._cleanup_tunnel(tnl)
 
     def _cleanup_expired_incomplete_links(self):
+        deauth = []
+        rollbk = []
         for tnlid, tnl in self._tunnels.items():
             if tnl.tunnel_state == Tunnel.STATES.TNL_AUTHORIZED and time.time() > tnl.timeout:
-                self._deauth_tnl(tnl)
-            elif  tnl.link is not None and \
-                tnl.link.creation_state != 0xC0 and \
+                deauth.append(tnl)
+            elif  tnl.link is not None and tnl.link.creation_state != 0xC0 and \
                 time.time() > tnl.timeout:
-                self._rollback_link_creation_changes(tnlid)
+                rollbk.append(tnlid)
+        for tnl in deauth:
+            self._deauth_tnl(tnl)
+        for tnlid in rollbk:
+            self._rollback_link_creation_changes(tnlid)
 
     def timer_method(self):
         with self._lock:

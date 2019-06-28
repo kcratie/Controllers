@@ -31,6 +31,7 @@ from controller.modules.NetworkBuilder import EdgeResponse
 from controller.modules.NetworkBuilder import EdgeNegotiate
 from controller.modules.GraphBuilder import GraphBuilder
 from controller.framework.ipoplib import RemoteAction
+#import controller.modules.NetworkGraph as ng
 
 class DiscoveredPeer():
     ExclusionBaseInterval = 60
@@ -84,7 +85,7 @@ class Topology(ControllerModule, CFX):
             max_wrk_ld = int(self.config["Overlays"][olid].get("MaxConcurrentEdgeSetup", 3))
             self._net_ovls[olid] = dict(NetBuilder=NetworkBuilder(self, olid, nid, max_wrk_ld),
                                         KnownPeers={}, NewPeerCount=0, NegoConnEdges=dict(),
-                                        OndPeers=[])
+                                        OndPeers=[], RelinkCount=1)
         try:
             # Subscribe for data request notifications from OverlayVisualizer
             self._cfx_handle.start_subscription("OverlayVisualizer",
@@ -381,8 +382,10 @@ class Topology(ControllerModule, CFX):
             ovl_cfg = self.config["Overlays"][olid]
             self.register_cbt("Logger", "LOG_DEBUG", "Netbuilder initiating refresh ...")
             enf_lnks = ovl_cfg.get("EnforcedLinks", [])
-            peer_list = [peer_id for peer_id in net_ovl["KnownPeers"] \
-                if net_ovl["KnownPeers"][peer_id].is_available]
+            #peer_list = [peer_id for peer_id in net_ovl["KnownPeers"] \
+            #    if net_ovl["KnownPeers"][peer_id].is_available]
+            peer_list = [*net_ovl["KnownPeers"].keys()]
+
             self.register_cbt("Logger", "LOG_DEBUG", "Peerlist for Netbuilder {0}"
                               .format(peer_list))
 
@@ -398,7 +401,14 @@ class Topology(ControllerModule, CFX):
                       "EnforcedEdges": enf_lnks, "MaxSuccessors": max_succ,
                       "MaxLongDistEdges": max_ldl, "MaxOnDemandEdges": max_ond}
             gb = GraphBuilder(params, top=self)
-            adjl = gb.build_adj_list(peer_list, nb.get_adj_list(), net_ovl["OndPeers"])
+            curr_adjl = nb.get_adj_list()
+            #rlc = net_ovl["RelinkCount"]
+            #if (len(curr_adjl) / rlc <= 0.5) or (len(curr_adjl) / rlc >= 1.5):
+            #    # time to relink
+            #    net_ovl["RelinkCount"] = len(curr_adjl) if curr_adjl else 1
+            #    curr_adjl = ng.ConnEdgeAdjacenctList(olid, self.node_id)
+            #    self.log("LOG_DEBUG", "RELINKing!")
+            adjl = gb.build_adj_list(peer_list, curr_adjl, net_ovl["OndPeers"])
             nb.refresh(adjl)
         else:
             self.register_cbt("Logger", "LOG_DEBUG", "TOP resuming Netbuilder refresh...")

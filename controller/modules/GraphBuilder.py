@@ -53,12 +53,8 @@ class GraphBuilder():
 
     def _get_successors(self):
         """ Generate a list of successor UIDs from the list of peers """
-        #todo: fix for max succ > 1
         successors = []
         num_peers = len(self._peers)
-        if not self._peers or (num_peers == 1 and self._node_id > self._peers[0]):
-            return successors
-
         num_nodes = len(self._nodes)
         successor_index = self._my_idx + 1
         num_succ = self._max_successors if (num_peers >= self._max_successors) else num_peers
@@ -103,25 +99,28 @@ class GraphBuilder():
         # Calculates long distance link candidates.
         long_dist_links = []
         net_sz = len(self._nodes)
-        node_off = GraphBuilder.symphony_prob_distribution(net_sz, num_ldl)
-        for i in node_off:
-            idx = math.floor(net_sz*i)
-            ldl_idx = (self._my_idx + idx) % net_sz
-            long_dist_links.append(self._nodes[ldl_idx])
+        if net_sz > 1:
+            num_ldl = min(num_ldl, net_sz)
+            node_off = GraphBuilder.symphony_prob_distribution(net_sz, num_ldl)
+            for i in node_off:
+                idx = math.floor(net_sz*i)
+                ldl_idx = (self._my_idx + idx) % net_sz
+                long_dist_links.append(self._nodes[ldl_idx])
         return long_dist_links
 
     def _build_long_dist_links(self, adj_list, transition_adj_list):
         # Preserve existing incoming ldl
-        ldlnks = transition_adj_list.edges_bytype(["CETypeILongDistance"])
-        for peer_id, ce in ldlnks.items():
-            if ce.edge_state in ("CEStateInitialized", "CEStateCreated", "CEStateConnected") and \
-                peer_id not in adj_list:
-                adj_list[peer_id] = ConnectionEdge(peer_id, ce.edge_id, ce.edge_type)
+        # handled in net builder
+        #ldlnks = transition_adj_list.edges_bytype(["CETypeILongDistance"])
+        #for peer_id, ce in ldlnks.items():
+        #    if ce.edge_state in ("CEStateInitialized", "CEStateCreated", "CEStateConnected") and \
+        #        peer_id not in adj_list:
+        #        adj_list[peer_id] = ConnectionEdge(peer_id, ce.edge_id, ce.edge_type)
         # evaluate existing ldl
         ldlnks = transition_adj_list.edges_bytype(["CETypeLongDistance"])
         num_existing_ldl = 0
         for peer_id, ce in ldlnks.items():
-            if ce.edge_state in ("CEStateInitialized", "CEStateCreated", "CEStateConnected") and \
+            if ce.edge_state in ["CEStateConnected"] and \
                 peer_id not in adj_list and not self.is_too_close(ce.peer_id):
                 adj_list[peer_id] = ConnectionEdge(peer_id, ce.edge_id, ce.edge_type)
                 num_existing_ldl += 1
@@ -159,6 +158,8 @@ class GraphBuilder():
 
     def build_adj_list(self, peers, transition_adj_list, request_list=None):
         self._prep(peers)
+        if request_list is None:
+            request_list = []
         adj_list = ConnEdgeAdjacenctList(self.overlay_id, self._node_id,
                                          self._max_successors, self._max_ldl_cnt, self._max_ond)
         self._build_enforced(adj_list)
@@ -189,7 +190,7 @@ class GraphBuilder():
 
     def _distance(self, peer_id):
         dst = 0
-        nsz = len(self._nodes)
+        nsz = max(1, len(self._nodes))
         try:
             pr_i = self._nodes.index(peer_id)
             dst = (pr_i + nsz - self._my_idx) % nsz
@@ -198,7 +199,7 @@ class GraphBuilder():
         return dst
 
     def _ideal_closest_distance(self):
-        nsz = len(self._nodes)
+        nsz = max(1, len(self._nodes))
         off = math.exp(-1 * math.log10(nsz))
         return math.floor(nsz * off)
 

@@ -48,7 +48,8 @@ CONFIG = {
     "OverlayId": "101000F",
     "LogFile": "/var/log/ipop-vpn/ring-route.log",
     "LogLevel": "INFO",
-    "MonitorInterval": 120
+    "FlowIdleTimeout": 60,
+    "MonitorInterval": 45
     }
 
 class netNode():
@@ -243,30 +244,35 @@ class LearningTable():
         self._ts_tbl = {}        # used to expire old leaf entries
 
     def __contains__(self, key_mac):
-        return self.ingress_tbl.__contains__(key_mac)
+        self._lazy_remove(key_mac)
+        return key_mac in self.rootsw_tbl or key_mac in self.ingress_tbl
 
     def __repr__(self):
-        state = "dpid={0}, nid={1}, ingress_tbl={2}, leaf_ports={3}, peersw_tbl={4}, rootsw_tbl={5}"\
-                .format(self._dpid, self._nid, self.ingress_tbl, self.leaf_ports, self.peersw_tbl,
-                        self.rootsw_tbl)
+        state = "dpid={0}, nid={1}, ingress_tbl={2}, leaf_ports={3}, peersw_tbl={4}, " \
+            "rootsw_tbl={5}".format(self._dpid, self._nid, self.ingress_tbl, self.leaf_ports,
+                                    self.peersw_tbl, self.rootsw_tbl)
         return state
 
     def __str__(self):
         return str("LearningTable<{}>".format(self.__repr__()))
 
-    def __getitem__(self, key_mac):
+    def _lazy_remove(self, key_mac):
         # lazy removal of expired entries
         now = time.time()
         ts = self._ts_tbl.get(key_mac, None)
-        if ts:
-            if ts <= now - 60:
-                self.ingress_tbl.pop(key_mac, None)
-                rsw = self.rootsw_tbl.pop(key_mac, None)
-                if rsw:
-                    rsw.leaf_macs.discard(key_mac)
-                return None
-            else:
-                self._ts_tbl[key_mac] = now
+        if not ts:
+            return
+        if ts <= now - CONFIG["FlowIdleTimeout"]:
+            self.ingress_tbl.pop(key_mac, None)
+            rsw = self.rootsw_tbl.pop(key_mac, None)
+            if rsw:
+                rsw.leaf_macs.discard(key_mac)
+                self.logger.info("popped client mac {0} rsw {1}".format(key_mac, rsw))
+            return
+        self._ts_tbl[key_mac] = now
+
+    def __getitem__(self, key_mac):
+        self._lazy_remove(key_mac)
         # return the best egress to reach the given mac
         psw = self.rootsw_tbl.get(key_mac)
         if psw and psw.port_no:
@@ -377,7 +383,7 @@ class RingRoute(app_manager.RyuApp):
         self.lt = LearningTable(self)   # The local nodes learning table
         self.nodes = dict()             # net node instance for datapath
         self.flooding_bounds = dict()   # flooding bounds instance for datapath
-        self.idle_timeout = 30
+        self.idle_timeout = CONFIG["FlowIdleTimeout"]
         self.monitor_interval = CONFIG["MonitorInterval"]
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER) # pylint: disable=no-member
@@ -461,8 +467,6 @@ class RingRoute(app_manager.RyuApp):
         dpid = datapath.id
 
         if eth.ethertype == 0xc0c0:
-            self.logger.debug("BoundedFlood pkt rcvd %s %s %s %s",
-                              datapath.id, eth.src, eth.dst, in_port)
             self.handle_bounded_flood_msg(datapath, pkt, in_port, msg)
         elif dst in self.lt:
             out_port = self.lt[dst]
@@ -487,7 +491,7 @@ class RingRoute(app_manager.RyuApp):
                 fld = FloodingBounds(self.nodes[dpid])
                 self.flooding_bounds[dpid] = fld
             out_bounds = fld.bounds(None, [in_port])
-            self.logger.info("Outgoing FloodRouteBound(s) generated=%s", out_bounds)
+            self.logger.info("<--\nGenerated FRB(s)=%s", out_bounds)
             if out_bounds:
                 self.do_bounded_flood(datapath, in_port, out_bounds, src, msg.data)
 
@@ -504,20 +508,22 @@ class RingRoute(app_manager.RyuApp):
                 num_rsw = 0
                 for rsw in self.lt.peersw_tbl.values():
                     if rsw.hop_count > 0:
-                        # The host bridge is counted as a hop.
-                        # However, for the number routing hops it should not be included.
-                        total_hc += (rsw.hop_count - 1)
+                        total_hc += rsw.hop_count
                         num_rsw += 1
                 if num_rsw == 0:
                     num_rsw = 1
+                self.nodes[dpid].counters["TotalHopCount"] = total_hc
+                self.nodes[dpid].counters["NumPeersCounted"] = num_rsw
                 self.nodes[dpid].counters["AvgFloodingHopCount"] = total_hc/num_rsw
                 self.request_stats(self.nodes[dpid].datapath)
                 msg += "{0}\n".format(self.nodes[dpid])
                 msg += "{0}\n".format(str(self.lt))
                 msg += "Max Flooding Hop Count {0}\n".\
                     format(self.nodes[dpid].counters.get("MaxFloodingHopCount", 1))
-                msg += "Avg Flooding Hop Count {0}\n".\
-                    format(self.nodes[dpid].counters.get("AvgFloodingHopCount", 0))
+                msg += "NPC={0}, THC={1}, AHC={2}\n".\
+                    format(self.nodes[dpid].counters.get("NumPeersCounted", 0),
+                           self.nodes[dpid].counters.get("TotalHopCount", 0),
+                           self.nodes[dpid].counters.get("AvgFloodingHopCount", 0))
             msg += str("<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<@@")
             self.logger.info(msg)
             hub.sleep(self.monitor_interval)
@@ -530,14 +536,18 @@ class RingRoute(app_manager.RyuApp):
             self.logger.warning("Request stats operation failed, OFPFlowStatsRequest=%s", req)
 
     def add_flow(self, datapath, match, actions, priority=0, tblid=0, idle=0):
-        ofproto = datapath.ofproto
-        parser = datapath.ofproto_parser
-        inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
-        mod = parser.OFPFlowMod(datapath=datapath, priority=priority, table_id=tblid,
-                                idle_timeout=idle, match=match, instructions=inst)
-        resp = datapath.send_msg(mod)
-        if not resp:
-            self.logger.warning("Add flow operation failed, OFPFlowMod=%s", mod)
+        try:
+            ofproto = datapath.ofproto
+            parser = datapath.ofproto_parser
+            inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
+            mod = parser.OFPFlowMod(datapath=datapath, priority=priority, table_id=tblid,
+                                    idle_timeout=idle, match=match, instructions=inst)
+            resp = datapath.send_msg(mod)
+            if not resp:
+                self.logger.warning("Add flow operation failed, OFPFlowMod=%s", mod)
+        except struct.error as err:
+            self.logger.error("Add flow operation failed, OFPFlowMod=%s\n struct.error=%s",
+                              mod, err)
 
     def add_flow_drop_multicast(self, datapath, priority=1, tblid=0):
         ofproto = datapath.ofproto
@@ -687,7 +697,7 @@ class RingRoute(app_manager.RyuApp):
         dpid = datapath.id
         parser = datapath.ofproto_parser
         rcvd_frb = pkt.protocols[1]
-        self.logger.info("rcvd frb=%s", rcvd_frb)
+        self.logger.info("-->\nReceived FRB=%s", rcvd_frb)
         if len(pkt.protocols) < 2:
             return
         payload = pkt.protocols[2]
@@ -714,7 +724,7 @@ class RingRoute(app_manager.RyuApp):
                 fld = FloodingBounds(self.nodes[dpid])
                 self.flooding_bounds[dpid] = fld
             out_bounds = fld.bounds(rcvd_frb, [in_port])
-            self.logger.info("Derived FRB generated=%s", out_bounds)
+            self.logger.info("Derived FRB(s)=%s", out_bounds)
             if out_bounds:
                 self.do_bounded_flood(datapath, in_port, out_bounds, src, payload)
 

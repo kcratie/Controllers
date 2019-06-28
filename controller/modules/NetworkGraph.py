@@ -19,20 +19,20 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 # THE SOFTWARE.
 import time
-import random
 try:
     import simplejson as json
 except ImportError:
     import json
 import struct
 import uuid
+import math
 
 EdgeTypesOut = ["CETypeUnknown", "CETypeEnforced", "CETypeSuccessor", "CETypeLongDistance",
                 "CETypeOnDemand"]
 EdgeTypesIn = ["CETypeUnknown", "CETypeIEnforced", "CETypePredecessor", "CETypeILongDistance",
                "CETypeIOnDemand"]
-EdgeStates = ["CEStateInitialized", "CEStateAuthorized", "CEStateCreated", "CEStateConnected",
-              "CEStateDisconnected", "CEStateDeleting"]
+EdgeStates = ["CEStateInitialized", "CEStatePreAuth", "CEStateAuthorized", "CEStateCreated",
+              "CEStateConnected", "CEStateDisconnected", "CEStateDeleting"]
 
 def transpose_edge_type(edge_type):
     et = EdgeTypesOut[0]
@@ -151,7 +151,6 @@ class ConnEdgeAdjacenctList():
         self.node_id = node_id
         self.conn_edges = {}
         self._successor_nid = node_id
-        self._predecessor_nid = node_id
         self.degree_threshold = 2 * (max_ldl + max_succ + max_ond)
         self.max_successors = max_succ
         self.max_ldl = max_ldl
@@ -162,17 +161,16 @@ class ConnEdgeAdjacenctList():
         self.num_succi = 0
         self.num_ond = 0
         self.num_ondi = 0
-        self._ssq = random.randint(255, 9859919926)
 
     def __len__(self):
         return len(self.conn_edges)
 
     def __repr__(self):
-        msg = "ConnEdgeAdjacenctList<overlay_id = %s, node_id = %s, predecessor_nid=%s, "\
-              "successor_nid=%s, num_edges=%d, max_successors=%d, max_ldl=%d, max_ondemand=%d, " \
-              "degree_threshold=%d, conn_edges = %s>" % \
-              (self.overlay_id[:7], self.node_id[:7], self._predecessor_nid[:7],
-               self._successor_nid[:7], len(self.conn_edges), self.max_successors, self.max_ldl,
+        msg = "ConnEdgeAdjacenctList<overlay_id = %s, node_id = %s, successor_nid=%s, " \
+              "num_edges=%d, num_ildl=%d, max_successors=%d, max_ldl=%d, "\
+              "max_ondemand=%d, degree_threshold=%d, conn_edges = %s>" % \
+              (self.overlay_id[:7], self.node_id[:7], self._successor_nid[:7],
+               len(self.conn_edges), self.num_ldli, self.max_successors, self.max_ldl,
                self.max_ondemand, self.degree_threshold, self.conn_edges)
         return msg
 
@@ -198,29 +196,18 @@ class ConnEdgeAdjacenctList():
     def __iter__(self):
         return self.conn_edges.__iter__()
 
-    @property
-    def ssq(self):
-        return self._ssq
-
-    def ssq_incr(self):
-        self._ssq += 1
-
     def is_successor(self, peer_id):
         return bool(peer_id == self._successor_nid)
 
-    def is_predecessor(self, peer_id):
-        return bool(peer_id == self._predecessor_nid)
-
-    def is_threshold_ondi(self):
+    def is_threshold_iond(self):
         return bool(self.num_ondi >= self.max_ondemand)
 
-    def is_threshold_ldli(self):
-        return bool(self.num_ldli >= self.max_ldl)
+    def is_threshold_ildl(self):
+        return bool(self.num_ldli >= math.ceil(self.max_ldl * 1.5))
 
     def add_connection_edge(self, ce):
         self.conn_edges[ce.peer_id] = ce
         self.update_closest()
-        self.ssq_incr()
         if ce.edge_type == "CETypeLongDistance":
             self.num_ldl += 1
         if ce.edge_type == "CETypeILongDistance":
@@ -236,9 +223,8 @@ class ConnEdgeAdjacenctList():
 
     def remove_connection_edge(self, peer_id):
         ce = self.conn_edges.pop(peer_id, None)
-        if peer_id in (self._successor_nid, self._predecessor_nid):
+        if peer_id == self._successor_nid:
             self.update_closest()
-        self.ssq_incr()
         return ce
 
     def edges_bytype(self, edge_type):
@@ -269,7 +255,6 @@ class ConnEdgeAdjacenctList():
         """ track the closest successor and predecessor """
         if not self.conn_edges:
             self._successor_nid = self.node_id
-            self._predecessor_nid = self.node_id
             return
         nl = [*self.conn_edges.keys()]
         nl.append(self.node_id)
@@ -280,5 +265,5 @@ class ConnEdgeAdjacenctList():
         succ_i = (idx+1) % nlen
         self._successor_nid = nl[succ_i]
 
-        pred_i = (idx + nlen - 1) % nlen
-        self._predecessor_nid = nl[pred_i]
+        #pred_i = (idx + nlen - 1) % nlen
+        #self._predecessor_nid = nl[pred_i]

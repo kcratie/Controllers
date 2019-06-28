@@ -297,6 +297,7 @@ class BridgeController(ControllerModule):
 
         ign_br_names = dict()
         for olid in self.overlays:
+            self._tunnels[olid] = dict()
             br_cfg = self.overlays[olid]
 
             if self.overlays[olid]["Type"] == LinuxBridge.bridge_type:
@@ -344,8 +345,6 @@ class BridgeController(ControllerModule):
             br = self._ovl_net[olid]
             tnlid = cbt.request.params["TunnelId"]
             if cbt.request.params["UpdateType"] == "LnkEvConnected":
-                if olid not in self._tunnels:
-                    self._tunnels[olid] = dict()
                 port_name = cbt.request.params["TapName"]
                 self._tunnels[olid][tnlid] = {
                     "PeerId": cbt.request.params["PeerId"],
