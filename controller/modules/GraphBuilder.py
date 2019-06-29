@@ -49,7 +49,7 @@ class GraphBuilder():
     def _build_enforced(self, adj_list):
         for peer_id in self._enforced:
             ce = ConnectionEdge(peer_id, edge_type="CETypeEnforced")
-            adj_list.add_connection_edge(ce)
+            adj_list.add_conn_edge(ce)
 
     def _get_successors(self):
         """ Generate a list of successor UIDs from the list of peers """
@@ -131,7 +131,7 @@ class GraphBuilder():
         for peer_id in ldl:
             if peer_id not in adj_list:
                 ce = ConnectionEdge(peer_id, edge_type="CETypeLongDistance")
-                adj_list.add_connection_edge(ce)
+                adj_list.add_conn_edge(ce)
 
     def _build_ondemand_links(self, adj_list, transition_adj_list, request_list):
         ond = {}
@@ -181,11 +181,11 @@ class GraphBuilder():
             if self._enforced and peer_id in self._enforced:
                 ce = ConnectionEdge(peer_id)
                 ce.edge_type = "CETypeEnforced"
-                adj_list.add_connection_edge(ce)
+                adj_list.add_conn_edge(ce)
             elif not self._manual_topo and self._node_id < peer_id:
                 ce = ConnectionEdge(peer_id)
                 ce.edge_type = "CETypeSuccessor"
-                adj_list.add_connection_edge(ce)
+                adj_list.add_conn_edge(ce)
         return adj_list
 
     def _distance(self, peer_id):

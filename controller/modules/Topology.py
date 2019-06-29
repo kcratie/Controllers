@@ -385,7 +385,8 @@ class Topology(ControllerModule, CFX):
             #peer_list = [peer_id for peer_id in net_ovl["KnownPeers"] \
             #    if net_ovl["KnownPeers"][peer_id].is_available]
             peer_list = [*net_ovl["KnownPeers"].keys()]
-
+            if not peer_list:
+                return
             self.register_cbt("Logger", "LOG_DEBUG", "Peerlist for Netbuilder {0}"
                               .format(peer_list))
 

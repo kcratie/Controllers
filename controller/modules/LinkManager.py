@@ -141,13 +141,12 @@ class LinkManager(ControllerModule):
         if new_inf_name:
             ign_tap_names.add(new_inf_name)
 
-        if self.config["Overlays"][overlay_id].get("AllowRecursiveTunneling", False):
-            # Ignore ALL the ipop tap devices (regardless of their overlay id/link id)
-            for tnlid in self._tunnels:
-                if self._tunnels[tnlid].get("Descriptor"):
-                    ign_tap_names.add(
-                        self._tunnels[tnlid]["TapName"])
-        # Overlay_id is only used to selectively ignore physical interfaces and bridges
+        #if self.config["Overlays"][overlay_id].get("AllowRecursiveTunneling", False):
+        #    # Ignore ALL the ipop tap devices (regardless of their overlay id/link id)
+        #    for tnlid in self._tunnels:
+        #        if self._tunnels[tnlid].tap_name:
+        #            ign_tap_names.add(
+        #                self._tunnels[tnlid].tap_name)
         ign_tap_names \
             |= self._ignored_net_interfaces[overlay_id]
         return ign_tap_names
@@ -223,10 +222,6 @@ class LinkManager(ControllerModule):
         """
         Update the tunnel desc with with lock owned
         """
-        #if tnlid not in self._tunnels:
-        #    self._tunnels[tnlid] = dict(Descriptor=dict())
-        #if "Descriptor" not in self._tunnels[tnlid]:
-        #    self._tunnels[tnlid] = dict()
         self._tunnels[tnlid].mac = tnl_desc["MAC"]
         self._tunnels[tnlid].tap_name = tnl_desc["TapName"]
         self._tunnels[tnlid].fpr = tnl_desc["FPR"]
@@ -399,12 +394,13 @@ class LinkManager(ControllerModule):
         tap_name = self.config["Overlays"][overlay_id]["TapName"][:8] + str(peer_id[:7])
         if os.name == "nt":
             tap_name = self.config["Overlays"][overlay_id]["TapName"]
+        self.log("LOG_DEBUG", "IgnoredNetInterfaces: %s", self._get_ignored_tap_names(overlay_id, tap_name))
         create_tnl_params = {
             "OverlayId": overlay_id,
             "NodeId": self.node_id,
             "TunnelId": tnlid,
             "LinkId": lnkid,
-            "StunServers": self.config["Stun"],
+            "StunServers": self.config.get("Stun", []),
             "Type": ol_type,
             "TapName": tap_name,
             "IP4": self.config["Overlays"][overlay_id].get("IP4"),
@@ -636,12 +632,13 @@ class LinkManager(ControllerModule):
         # Send request to Tincan
         ol_type = self.config["Overlays"][olid]["Type"]
         tap_name = self.config["Overlays"][olid]["TapName"][:8] + str(peer_id[:7])
+        self.log("LOG_DEBUG", "IgnoredNetInterfaces: %s", self._get_ignored_tap_names(olid, tap_name))
         create_link_params = {
             "OverlayId": olid,
             # overlay params
             "TunnelId": tnlid,
             "NodeId": self.node_id,
-            "StunServers": self.config["Stun"],
+            "StunServers": self.config.get("Stun", []),
             "Type": ol_type,
             "TapName": tap_name,
             "IP4": self.config["Overlays"][olid].get("IP4"),

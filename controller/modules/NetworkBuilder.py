@@ -91,7 +91,6 @@ class NetworkBuilder():
             self._current_adj_list.max_successors = net_graph.max_successors
             self._current_adj_list.max_ldl = net_graph.max_ldl
             self._current_adj_list.max_ondemand = net_graph.max_ondemand
-            self._current_adj_list.degree_threshold = net_graph.degree_threshold
             self._current_adj_list.update_closest()
             self._process_pending_adj_list()
         self._create_new_edges()
@@ -114,8 +113,8 @@ class NetworkBuilder():
             assert ce.edge_state == "CEStateAuthorized", "Deauth CE={0}".format(ce)
             ce.edge_state = "CEStateDeleting"
             del self._current_adj_list[peer_id]
+            del self._pending_adj_list[peer_id]
             self._refresh_in_progress -= 1
-            self._pending_adj_list.pop(peer_id, None)
         elif event["UpdateType"] == "LnkEvCreating":
             conn_edge = self._current_adj_list.conn_edges.get(peer_id, None)
             conn_edge.edge_state = "CEStateCreated"
@@ -123,8 +122,8 @@ class NetworkBuilder():
             self._current_adj_list[peer_id].edge_state = "CEStateConnected"
             self._current_adj_list[peer_id].connected_time = \
                 event["ConnectedTimestamp"]
+            del self._pending_adj_list[peer_id]
             self._refresh_in_progress -= 1
-            self._pending_adj_list.pop(peer_id, None)
         elif event["UpdateType"] == "LnkEvDisconnected":
             # the local topology did not request removal of the connection
             self._top.top_log("CEStateDisconnected event recvd peer_id: {0}, edge_id: {1}".
@@ -135,7 +134,7 @@ class NetworkBuilder():
         elif event["UpdateType"] == "LnkEvRemoved":
             self._current_adj_list[peer_id].edge_state = "CEStateDeleting"
             del self._current_adj_list[peer_id]
-            self._pending_adj_list.pop(peer_id, None)
+            del self._pending_adj_list[peer_id]
             self._refresh_in_progress -= 1
         elif event["UpdateType"] == "RemoveEdgeFailed":
             # leave the node in the adj list and marked for removal to be retried.
@@ -242,7 +241,7 @@ class NetworkBuilder():
         elif edge_state == "CEStateInitialized":
             edge_resp = EdgeResponse(is_accepted=True, data="Precollision edge permitted")
             del self._current_adj_list[peer_id]
-            self._pending_adj_list.pop(peer_id, None)
+            del self._pending_adj_list[peer_id]
             del self._negotiated_edges[peer_id]
         elif edge_state == "CEStatePreAuth" and nid < edge_req.initiator_id:
             msg = "E2 - Node {0} superceeds edge request collision, "\
@@ -293,7 +292,7 @@ class NetworkBuilder():
         self._refresh_in_progress += 1
         ce = self._negotiated_edges.pop(peer_id)
         ce.edge_state = "CEStateAuthorized"
-        self._current_adj_list.add_connection_edge(ce)
+        self._current_adj_list.add_conn_edge(ce)
 
     def complete_edge_negotiation(self, edge_nego):
         """ Role A2 """
@@ -323,7 +322,7 @@ class NetworkBuilder():
             if edge_nego.data[:2] != "E2":
                 ce.edge_state = "CEStateDeleting"
                 self._negotiated_edges.pop(ce.peer_id)
-                self._pending_adj_list.pop(peer_id, None)
+                del self._pending_adj_list[peer_id]
                 del self._current_adj_list[ce.peer_id]
         else:
             if ce.edge_id != edge_nego.edge_id:
@@ -331,7 +330,7 @@ class NetworkBuilder():
                                   "The transaction has been discarded.", "LOG_ERROR")
                 ce.edge_state = "CEStateDeleting"
                 self._negotiated_edges.pop(ce.peer_id)
-                self._pending_adj_list.pop(peer_id, None)
+                del self._pending_adj_list[peer_id]
                 del self._current_adj_list[ce.peer_id]
                 self._refresh_in_progress -= 1
             else:
