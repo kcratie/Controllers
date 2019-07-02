@@ -162,8 +162,8 @@ class NetworkBuilder():
                 # don't delete an edge before it completes the create process. if it fails LNK will
                 # initiate the removal.
                 continue
-            #if time.time() - self._current_adj_list[peer_id].connected_time < 60:
-            #    continue # edge is too young
+            if time.time() - self._current_adj_list[peer_id].connected_time < 30:
+                continue # events get supressed
             self._current_adj_list[peer_id].marked_for_delete = True
 
     def _remove_edges(self):

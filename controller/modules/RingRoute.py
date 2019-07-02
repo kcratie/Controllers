@@ -110,12 +110,12 @@ class netNode():
             pl.append(entry[1])
         return pl
 
-    def update(self):
+    def update(self, tapn=None):
         if not self.node_id:
             self.update_node_id()
         self.logger.info("==Updating node %s==", self.node_id)
         self.update_switch()
-        self.update_ipop_topology()
+        self.update_ipop_topology(tapn)
         self.update_links()
         self.update_leaf_ports()
 
@@ -126,7 +126,7 @@ class netNode():
             self.switch = sw[0]
         self.logger.info("+ Updated switch %s", self.switch)
 
-    def update_ipop_topology(self):
+    def update_ipop_topology(self, tapn):
         olid = CONFIG["OverlayId"]
         req = dict(Request=dict(Action="GetTunnels", Params={"OverlayId": olid}))
         resp = self._send_recv(self.addr, req)
@@ -135,12 +135,21 @@ class netNode():
             if not topo:
                 self.logger.info("- No IPOP Topo data available as yet")
                 return # nothing created in ipop as yet
-            self.mac_local_to_peer.clear()
-            for tnlid in topo:
-                local = topo[tnlid]["MAC"]
-                peer_mac = topo[tnlid]["PeerMac"]
-                peer_id = topo[tnlid]["PeerId"]
-                self.mac_local_to_peer[local] = (peer_mac, peer_id)
+            if tapn:
+                for tnlid, tnl in topo.items():
+                    if tnl["TapName"] == tapn:
+                        local = tnl["MAC"]
+                        peer_mac = tnl["PeerMac"]
+                        peer_id = tnl["PeerId"]
+                        self.mac_local_to_peer[local] = (peer_mac, peer_id)
+                        break
+            else:
+                self.mac_local_to_peer.clear()
+                for tnlid in topo:
+                    local = topo[tnlid]["MAC"]
+                    peer_mac = topo[tnlid]["PeerMac"]
+                    peer_id = topo[tnlid]["PeerId"]
+                    self.mac_local_to_peer[local] = (peer_mac, peer_id)
 
             self.logger.info("+ Updated mac_local_to_peer %s", self.mac_local_to_peer)
         else:
@@ -435,10 +444,9 @@ class RingRoute(app_manager.RyuApp):
         ofp = dp.ofproto
         port_no = msg.desc.port_no
         node = self.nodes[dp.id]
-
         if msg.reason == ofp.OFPPR_ADD:
             self.logger.info("OFPPortStatus: port ADDED desc=%s", msg.desc)
-            self.update_net_node(dp)
+            self.update_net_node(dp, msg.desc.name.decode("utf-8"))
             self.lt.leaf_ports = node.leaf_ports()
             self.lt.register_peer_switch(node.peer_id(port_no), port_no)
             self.do_bf_leaf_transfer(dp, msg.desc.port_no)
@@ -504,17 +512,21 @@ class RingRoute(app_manager.RyuApp):
         while True:
             msg = str("@@>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>\n")
             for dpid in self.nodes:
+                self.nodes[dpid].counters["MaxFloodingHopCount"] = 0
                 total_hc = 0
                 num_rsw = 0
                 for rsw in self.lt.peersw_tbl.values():
                     if rsw.hop_count > 0:
                         total_hc += rsw.hop_count
                         num_rsw += 1
+                    if rsw.hop_count > self.nodes[dpid].counters.get("MaxFloodingHopCount", 1):
+                        self.nodes[dpid].counters["MaxFloodingHopCount"] = rsw.hop_count
                 if num_rsw == 0:
                     num_rsw = 1
                 self.nodes[dpid].counters["TotalHopCount"] = total_hc
                 self.nodes[dpid].counters["NumPeersCounted"] = num_rsw
                 self.nodes[dpid].counters["AvgFloodingHopCount"] = total_hc/num_rsw
+
                 self.request_stats(self.nodes[dpid].datapath)
                 msg += "{0}\n".format(self.nodes[dpid])
                 msg += "{0}\n".format(str(self.lt))
@@ -609,12 +621,12 @@ class RingRoute(app_manager.RyuApp):
 
     ###############################################################################################
 
-    def update_net_node(self, datapath):
+    def update_net_node(self, datapath, tap_name):
         dpid = datapath.id
         node = self.nodes.get(dpid, None)
         if not node:
             node = netNode(datapath, self)
-        node.update()
+        node.update(tap_name)
         self.nodes[dpid] = node
         return node
 
@@ -885,7 +897,7 @@ class FloodingBounds():
 ###################################################################################################
 class TrafficAnalyzer():
     """ A very simple traffic analyzer to trigger an on demand tunnel """
-    _DEMAND_THRESHOLD = (1<<20)
+    _DEMAND_THRESHOLD = (3*(1<<10))
     def __init__(self, logger, demand_threshold=None):
         self.demand_threshold = demand_threshold if demand_threshold else \
             TrafficAnalyzer._DEMAND_THRESHOLD
@@ -904,6 +916,7 @@ class TrafficAnalyzer():
                 continue
             assert bool(psw.rnid)
             if stat.byte_count > self.demand_threshold and psw.rnid not in self.ond:
+                self.logger.info("Requesting On-Demand edge to %s", psw.rnid)
                 tunnel_reqs.append((psw.rnid, "ADD"))
                 self.ond.add(psw.rnid)
             #elif stat.byte_count < self.demand_threshold and psw.rnid in self.ond:

@@ -42,9 +42,11 @@ class DiscoveredPeer():
         self.available_time = time.time()
 
     def __repr__(self):
-        state = "DiscoveredPeer<peer_id=%s, is_banned=%s, successive_fails=%s, available_time=%s>"\
-                % (self.peer_id[:7], self.is_banned, self.successive_fails,
-                   datetime.fromtimestamp(self.available_time))
+        #state = "DiscoveredPeer<peer_id=%s, is_banned=%s, successive_fails=%s, available_time=%s>"\
+        #        % (self.peer_id[:7], self.is_banned, self.successive_fails,
+        #           datetime.fromtimestamp(self.available_time))
+        state = "DiscoveredPeer<peer_id=%s>" % (self.peer_id[:7])
+
         return state
 
     def exclude(self):
@@ -335,7 +337,7 @@ class Topology(ControllerModule, CFX):
     def timer_method(self):
         with self._lock:
             self._manage_topology()
-            self.log("LOG_DEBUG", "Timer TOP State=%s", str(self))
+            self.log("LOG_INFO", "Timer TOP State=%s", str(self))
 
     def top_add_edge(self, overlay_id, peer_id, edge_id):
         """
@@ -393,7 +395,7 @@ class Topology(ControllerModule, CFX):
             max_succ = int(ovl_cfg.get("MaxSuccessors", 1))
             max_ond = int(ovl_cfg.get("MaxOnDemandEdges", 2))
             num_peers = len(peer_list) if len(peer_list) > 1 else 2
-            max_ldl = int(ovl_cfg.get("MaxLongDistEdges", math.floor(math.log(num_peers, 2))))
+            max_ldl = int(ovl_cfg.get("MaxLongDistEdges", math.floor(math.log(num_peers+1, 2))))
             manual_topo = ovl_cfg.get("ManualTopology", False)
             if self.config["Overlays"][olid].get("Role", "Switch").casefold() == \
                 "leaf".casefold():
