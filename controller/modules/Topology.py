@@ -217,10 +217,10 @@ class Topology(ControllerModule, CFX):
         if (olid in self._net_ovls and peer_id in self._net_ovls[olid]["KnownPeers"] and
                 self._net_ovls[olid]["KnownPeers"][peer_id].is_available):
             self._net_ovls[olid]["OndPeers"].append(op)
-            self.register_cbt("Logger", "LOG_INFO", "Added on demand request to queue {0}".
+            self.register_cbt("Logger", "LOG_INFO", "Added on-demand tunnel request to queue {0}".
                               format(op))
         else:
-            self.register_cbt("Logger", "LOG_WARNING", "Invalid on demand tunnel request "
+            self.register_cbt("Logger", "LOG_WARNING", "Invalid on-demand tunnel request "
                               "parameter, OverlayId={0}, PeerId={1}".format(olid, peer_id))
 
     def req_handler_negotiate_edge(self, edge_cbt):
@@ -384,9 +384,9 @@ class Topology(ControllerModule, CFX):
             ovl_cfg = self.config["Overlays"][olid]
             self.register_cbt("Logger", "LOG_DEBUG", "Netbuilder initiating refresh ...")
             enf_lnks = ovl_cfg.get("EnforcedLinks", [])
-            #peer_list = [peer_id for peer_id in net_ovl["KnownPeers"] \
-            #    if net_ovl["KnownPeers"][peer_id].is_available]
-            peer_list = [*net_ovl["KnownPeers"].keys()]
+            peer_list = [peer_id for peer_id in net_ovl["KnownPeers"] \
+                if net_ovl["KnownPeers"][peer_id].is_available]
+            #peer_list = [*net_ovl["KnownPeers"].keys()]
             if not peer_list:
                 return
             self.register_cbt("Logger", "LOG_DEBUG", "Peerlist for Netbuilder {0}"

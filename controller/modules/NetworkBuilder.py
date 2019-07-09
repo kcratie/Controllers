@@ -244,8 +244,8 @@ class NetworkBuilder():
             del self._pending_adj_list[peer_id]
             del self._negotiated_edges[peer_id]
         elif edge_state == "CEStatePreAuth" and nid < edge_req.initiator_id:
-            msg = "E2 - Node {0} superceeds edge request collision, "\
-                        "TunnelId={1}".format(nid, self._current_adj_list[peer_id].edge_id[:7])
+            msg = "E2 - Node {0} superceeds edge request due to collision, "\
+                        "edge={1}".format(nid, self._current_adj_list[peer_id].edge_id[:7])
             edge_resp = EdgeResponse(is_accepted=False, data=msg)
             self._top.top_log(msg)
         elif edge_state == "CEStatePreAuth" and nid > edge_req.initiator_id:
@@ -272,6 +272,8 @@ class NetworkBuilder():
             edge_resp = EdgeResponse(is_accepted=True, data="Successor edge permitted")
         elif edge_req.edge_type == "CETypeEnforced":
             edge_resp = EdgeResponse(is_accepted=True, data="Enforced edge permitted")
+        elif edge_req.edge_type == "CETypeOnDemand":
+            edge_resp = EdgeResponse(is_accepted=True, data="On-demand edge permitted")
         elif not self._current_adj_list.is_threshold_ildl():
             edge_resp = EdgeResponse(is_accepted=True, data="Any edge permitted")
         else:
@@ -309,12 +311,8 @@ class NetworkBuilder():
 
         ce = self._negotiated_edges.get(edge_nego.recipient_id, None) # do not pop here, E0 needed
         if not ce:
-            ce = self._current_adj_list[edge_nego.recipient_id]
-            if ce.edge_state != "CEStatePreAuth":
-                # anomoly
-                self._top.log("LOG_WARNING", "Edge nego A2 completion but CE not in nego list %s",
-                              str(ce))
-                return
+            return # OK - Collision override occurred, CE was popped in role B2 (above). Completion
+                   # order can vary, in other case handled below.
         if not edge_nego.is_accepted:
             self._refresh_in_progress -= 1
             # if E2 (request superceeded) do nothing here. The corresponding CE instance will

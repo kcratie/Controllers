@@ -253,8 +253,8 @@ class SDNIRequestHandler(socketserver.BaseRequestHandler):
         elif task["Request"]["Action"] == "TunnelRquest":
             task["Response"] = dict(Status=True,
                                     Data=dict(StatusMsg="Request shall be considered"))
-            self.server.sdni.log("LOG_DEBUG", "On-demand request recvd %s", task["Request"])
-            self.server.sdni.sdn_tunnel_request(task["Request"]["Params"]) # op is ADD/REMOVE
+            self.server.sdni.log("LOG_INFO", "On-demand tunnel request recvd %s", task["Request"])
+            self.server.sdni.tunnel_request(task["Request"]["Params"]) # op is ADD/REMOVE
         else:
             self.server.sdni.log("LOG_WARNING", "An unrecognized SDNI task was discarded %s",
                                  task)
@@ -443,3 +443,6 @@ class BridgeController(ControllerModule):
 
     def get_ovl_topo(self, overlay_id):
         return self._tunnels.get(overlay_id, None)
+
+    def tunnel_request(self, req_params):
+        self.register_cbt("Topology", "TOP_REQUEST_OND_TUNNEL", req_params)

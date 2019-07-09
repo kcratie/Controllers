@@ -19,7 +19,6 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 # THE SOFTWARE.
 
-#from collections import namedtuple
 try:
     import simplejson as json
 except ImportError:
@@ -28,7 +27,8 @@ import socket
 import time
 import struct
 import uuid
-#from operator import attrgetter
+from distutils import spawn
+import subprocess
 from ryu.base import app_manager
 from ryu.controller import ofp_event
 from ryu.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER, DEAD_DISPATCHER
@@ -41,16 +41,21 @@ from ryu.lib import hub
 from ryu.lib import mac as mac_lib
 from ryu.topology import event, switches
 from ryu.topology.api import get_switch
-#from NetworkGraph import ConnectionEdge
-#from NetworkGraph import ConnEdgeAdjacenctList
 
 CONFIG = {
     "OverlayId": "101000F",
+    "BridgeName": "ipopbr101000F",
     "LogFile": "/var/log/ipop-vpn/ring-route.log",
     "LogLevel": "INFO",
     "FlowIdleTimeout": 60,
     "MonitorInterval": 45
     }
+def runcmd(cmd):
+    """ Run a shell command. if fails, raise an exception. """
+    if cmd[0] is None:
+        raise ValueError("No executable specified to run")
+    p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    return p
 
 class netNode():
     SDNI_PORT = 5802
@@ -385,6 +390,7 @@ class LearningTable():
 class RingRoute(app_manager.RyuApp):
     OFP_VERSIONS = [ofproto_v1_4.OFP_VERSION]
     SDNI_PORT = 5802
+    OFCTL = spawn.find_executable("ovs-ofctl")
     def __init__(self, *args, **kwargs):
         super(RingRoute, self).__init__(*args, **kwargs)
         self.monitor_thread = hub.spawn(self._monitor)
@@ -505,8 +511,8 @@ class RingRoute(app_manager.RyuApp):
 
     @set_ev_cls(ofp_event.EventOFPFlowStatsReply, MAIN_DISPATCHER) # pylint: disable=no-member
     def _flow_stats_reply_handler(self, ev):
-        self.nodes[ev.msg.datapath.id].ond_tunnel(ev.msg.body, self.lt)
-
+        #self.nodes[ev.msg.datapath.id].ond_tunnel(ev.msg.body, self.lt)
+        pass
     ###################################################################################
     def _monitor(self):
         while True:
@@ -582,26 +588,35 @@ class RingRoute(app_manager.RyuApp):
 
     def del_flows_port(self, datapath, port_no, tblid=None):
         self.logger.debug("Deleting all flows on egress %s", port_no)
-        ofproto = datapath.ofproto
-        if tblid is None:
-            tblid = ofproto.OFPTT_ALL
-        parser = datapath.ofproto_parser
-        cmd = ofproto.OFPFC_DELETE
-        match = parser.OFPMatch()
-        mod = parser.OFPFlowMod(datapath=datapath, cookie=0, cookie_mask=0,
-                                table_id=tblid, flags=ofproto.OFPFF_SEND_FLOW_REM,
-                                match=match, command=cmd, out_port=port_no)
-        resp = datapath.send_msg(mod)
-        if not resp:
-            self.logger.warning("Delete flow operation failed, egress=%s, OFPFlowMod=%s",
-                                port_no, mod)
-        match = parser.OFPMatch(in_port=port_no)
-        mod = parser.OFPFlowMod(datapath=datapath, table_id=tblid, match=match, command=cmd,
-                                flags=ofproto.OFPFF_SEND_FLOW_REM)
-        resp = datapath.send_msg(mod)
-        if not resp:
-            self.logger.warning("Delete flow operation failed, egress=%s, OFPFlowMod=%s",
-                                port_no, mod)
+        # this is silently failing, no flows are deleted
+        #ofproto = datapath.ofproto
+        #if tblid is None:
+        #    tblid = ofproto.OFPTT_ALL
+        #parser = datapath.ofproto_parser
+        #cmd = ofproto.OFPFC_DELETE
+        #match = parser.OFPMatch()
+        #mod = parser.OFPFlowMod(datapath=datapath, table_id=ofproto.OFPTT_ALL, match=match,
+        #                        command=cmd, flags=ofproto.OFPFF_SEND_FLOW_REM, out_port=port_no,
+        #                        idle_timeout=self.idle_timeout)
+        #self.logger.info("Delete flow mod output, egress=%s, OFPFlowMod=%s", port_no, mod)
+        #resp = datapath.send_msg(mod)
+        #if not resp:
+        #    self.logger.warning("Delete flow operation failed, egress=%s, OFPFlowMod=%s",
+        #                        port_no, mod)
+        #match = parser.OFPMatch(in_port=port_no)
+        #mod = parser.OFPFlowMod(datapath=datapath, table_id=tblid, match=match, command=cmd,
+        #                        flags=ofproto.OFPFF_SEND_FLOW_REM, idle_timeout=self.idle_timeout)
+        #self.logger.info("Delete flow mod, egress=%s, OFPFlowMod=%s", port_no, mod)
+        #resp = datapath.send_msg(mod)
+        #if not resp:
+        #    self.logger.warning("Delete flow operation failed, egress=%s, OFPFlowMod=%s",
+        #                        port_no, mod)
+        resp = runcmd([RingRoute.OFCTL, "del-flows", CONFIG["BridgeName"],
+                                 "in_port={0}".format(port_no)])
+        self.logger.warning(resp.stdout.decode("utf-8") + "::" + resp.stderr.decode("utf-8"))
+        resp = runcmd([RingRoute.OFCTL, "del-flows", CONFIG["BridgeName"],
+                                 "out_port={0}".format(port_no)])
+        self.logger.warning(resp.stdout.decode("utf-8") + "::" + resp.stderr.decode("utf-8"))
 
     def update_flow_match_dstmac(self, datapath, dst_mac, new_egress, tblid=None):
         self.logger.debug("Updating all flows matching dst mac %s", dst_mac)
@@ -897,7 +912,7 @@ class FloodingBounds():
 ###################################################################################################
 class TrafficAnalyzer():
     """ A very simple traffic analyzer to trigger an on demand tunnel """
-    _DEMAND_THRESHOLD = (3*(1<<10))
+    _DEMAND_THRESHOLD = 1<<23 # 80MB
     def __init__(self, logger, demand_threshold=None):
         self.demand_threshold = demand_threshold if demand_threshold else \
             TrafficAnalyzer._DEMAND_THRESHOLD

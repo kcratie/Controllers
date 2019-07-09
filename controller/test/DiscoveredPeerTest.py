@@ -65,7 +65,7 @@ def main():
     for cnt in range(0, 8):
         known_peers[peer_id].exclude()
         at = datetime.fromtimestamp(known_peers[peer_id].available_time)
-        print ("Node {0} unavailable till {1}".format(peer_id, at))
+        print("Node {0} unavailable till {1}".format(peer_id, at))
     known_peers[peer_id].presence()
     peer_list = [peer_id for peer_id in known_peers if known_peers[peer_id].is_available]
     print("Avialable peers list ={0}\n{1}".format(len(peer_list), peer_list))

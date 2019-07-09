@@ -25,7 +25,6 @@ except ImportError:
     import json
 import struct
 import uuid
-import math
 
 EdgeTypesOut = ["CETypeUnknown", "CETypeEnforced", "CETypeSuccessor", "CETypeLongDistance",
                 "CETypeOnDemand"]

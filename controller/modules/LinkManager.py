@@ -265,7 +265,8 @@ class LinkManager(ControllerModule):
                             params = {"OverlayId": olid, "TunnelId": tnlid, "LinkId": lnkid,
                                       "PeerId": peer_id, "TapName": tnl.tap_name}
                             self.register_cbt("TincanInterface", "TCI_REMOVE_TUNNEL", params)
-                        elif retry >= 1 and tnl.tunnel_state == Tunnel.STATES.TNL_QUERYING:
+                        #elif retry >= 1 and tnl.tunnel_state == Tunnel.STATES.TNL_QUERYING:
+                        elif retry >= 0 and tnl.tunnel_state == Tunnel.STATES.TNL_QUERYING:
                             # link went offline so notify top
                             tnl.tunnel_state = Tunnel.STATES.TNL_OFFLINE
                             olid = tnl.overlay_id
