@@ -42,11 +42,13 @@ class DiscoveredPeer():
         self.available_time = time.time()
 
     def __repr__(self):
-        #state = "DiscoveredPeer<peer_id=%s, is_banned=%s, successive_fails=%s, available_time=%s>"\
-        #        % (self.peer_id[:7], self.is_banned, self.successive_fails,
-        #           datetime.fromtimestamp(self.available_time))
-        state = "DiscoveredPeer<peer_id=%s>" % (self.peer_id[:7])
+        state = "DiscoveredPeer<peer_id=%s, is_banned=%s, successive_fails=%s, available_time=%s>"\
+                % (self.peer_id[:7], self.is_banned, self.successive_fails,
+                   datetime.fromtimestamp(self.available_time))
+        return state
 
+    def __str__(self):
+        state = "DiscoveredPeer<peer_id=%s>" % (self.peer_id[:7])
         return state
 
     def exclude(self):
@@ -75,7 +77,7 @@ class Topology(ControllerModule, CFX):
         self._topo_changed_publisher = None
 
     def __repr__(self):
-        state = "Topology<overlays=%s>" % (self._net_ovls)
+        state = "Topology<%s>" % (self._net_ovls)
         return state
 
     def initialize(self):
@@ -85,9 +87,9 @@ class Topology(ControllerModule, CFX):
         nid = self.node_id
         for olid in self._cfx_handle.query_param("Overlays"):
             max_wrk_ld = int(self.config["Overlays"][olid].get("MaxConcurrentEdgeSetup", 3))
-            self._net_ovls[olid] = dict(NetBuilder=NetworkBuilder(self, olid, nid, max_wrk_ld),
-                                        KnownPeers={}, NewPeerCount=0, NegoConnEdges=dict(),
-                                        OndPeers=[], RelinkCount=1)
+            self._net_ovls[olid] = dict(RelinkCount=1, NewPeerCount=0, 
+                                        NetBuilder=NetworkBuilder(self, olid, nid, max_wrk_ld),
+                                        KnownPeers={}, NegoConnEdges=dict(), OndPeers=[])
         try:
             # Subscribe for data request notifications from OverlayVisualizer
             self._cfx_handle.start_subscription("OverlayVisualizer",
@@ -217,7 +219,7 @@ class Topology(ControllerModule, CFX):
         if (olid in self._net_ovls and peer_id in self._net_ovls[olid]["KnownPeers"] and
                 self._net_ovls[olid]["KnownPeers"][peer_id].is_available):
             self._net_ovls[olid]["OndPeers"].append(op)
-            self.register_cbt("Logger", "LOG_INFO", "Added on-demand tunnel request to queue {0}".
+            self.register_cbt("Logger", "LOG_DEBUG", "Added on-demand tunnel request to queue {0}".
                               format(op))
         else:
             self.register_cbt("Logger", "LOG_WARNING", "Invalid on-demand tunnel request "
@@ -337,7 +339,7 @@ class Topology(ControllerModule, CFX):
     def timer_method(self):
         with self._lock:
             self._manage_topology()
-            self.log("LOG_INFO", "Timer TOP State=%s", str(self))
+            self.log("LOG_INFO", "State=%s", str(self))
 
     def top_add_edge(self, overlay_id, peer_id, edge_id):
         """

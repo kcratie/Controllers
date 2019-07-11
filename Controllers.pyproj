@@ -5,7 +5,7 @@
     <SchemaVersion>2.0</SchemaVersion>
     <ProjectGuid>{7b4898c4-0935-4440-9f85-b75010c30707}</ProjectGuid>
     <ProjectHome />
-    <StartupFile>controller\test\DiscoveredPeerTest.py</StartupFile>
+    <StartupFile>controller\test\NetworkGraphTest.py</StartupFile>
     <SearchPath />
     <WorkingDirectory>.</WorkingDirectory>
     <OutputPath>.</OutputPath>
@@ -37,8 +37,7 @@
     <Compile Include="controller\modules\GraphBuilder.py" />
     <Compile Include="controller\modules\NetworkBuilder.py" />
     <Compile Include="controller\modules\NetworkGraph.py" />
-    <Compile Include="controller\modules\RingRoute.py" />
-    <Compile Include="controller\modules\SDNInterface.py" />
+    <Compile Include="controller\modules\BoundedFlood.py" />
     <Compile Include="controller\modules\Topology.py" />
     <Compile Include="controller\modules\LinkManager.py" />
     <Compile Include="controller\modules\Logger.py" />
@@ -49,6 +48,7 @@
     <Compile Include="controller\modules\__init__.py" />
     <Compile Include="controller\test\DiscoveredPeerTest.py" />
     <Compile Include="controller\test\GraphBuilderTest.py" />
+    <Compile Include="controller\test\NetworkGraphTest.py" />
     <Compile Include="controller\__init__.py" />
   </ItemGroup>
   <ItemGroup>

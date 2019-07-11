@@ -48,7 +48,7 @@ CONFIG = {
     "LogFile": "/var/log/ipop-vpn/ring-route.log",
     "LogLevel": "INFO",
     "FlowIdleTimeout": 60,
-    "MonitorInterval": 45
+    "MonitorInterval": 60
     }
 def runcmd(cmd):
     """ Run a shell command. if fails, raise an exception. """
@@ -387,12 +387,12 @@ class LearningTable():
 
 ###################################################################################################
 ###################################################################################################
-class RingRoute(app_manager.RyuApp):
+class BoundedFlood(app_manager.RyuApp):
     OFP_VERSIONS = [ofproto_v1_4.OFP_VERSION]
     SDNI_PORT = 5802
     OFCTL = spawn.find_executable("ovs-ofctl")
     def __init__(self, *args, **kwargs):
-        super(RingRoute, self).__init__(*args, **kwargs)
+        super(BoundedFlood, self).__init__(*args, **kwargs)
         self.monitor_thread = hub.spawn(self._monitor)
         ethernet.ethernet.register_packet_type(FloodRouteBound, FloodRouteBound.ETH_TYPE_BF)
         self.lt = LearningTable(self)   # The local nodes learning table
@@ -611,10 +611,10 @@ class RingRoute(app_manager.RyuApp):
         #if not resp:
         #    self.logger.warning("Delete flow operation failed, egress=%s, OFPFlowMod=%s",
         #                        port_no, mod)
-        resp = runcmd([RingRoute.OFCTL, "del-flows", CONFIG["BridgeName"],
+        resp = runcmd([BoundedFlood.OFCTL, "del-flows", CONFIG["BridgeName"],
                                  "in_port={0}".format(port_no)])
         self.logger.warning(resp.stdout.decode("utf-8") + "::" + resp.stderr.decode("utf-8"))
-        resp = runcmd([RingRoute.OFCTL, "del-flows", CONFIG["BridgeName"],
+        resp = runcmd([BoundedFlood.OFCTL, "del-flows", CONFIG["BridgeName"],
                                  "out_port={0}".format(port_no)])
         self.logger.warning(resp.stdout.decode("utf-8") + "::" + resp.stderr.decode("utf-8"))
 
