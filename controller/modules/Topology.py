@@ -37,7 +37,7 @@ class DiscoveredPeer():
     ExclusionBaseInterval = 60
     def __init__(self, peer_id):
         self.peer_id = peer_id
-        self.is_banned = False
+        self.is_banned = False # bars conn attempts from local node, the peer can still recon
         self.successive_fails = 0
         self.available_time = time.time()
 
@@ -55,7 +55,7 @@ class DiscoveredPeer():
         self.successive_fails += 1
         self.available_time = (random.randint(2, 5) * DiscoveredPeer.ExclusionBaseInterval *
                                self.successive_fails) + time.time()
-        if self.successive_fails >= 10:
+        if self.successive_fails >= 3:
             self.is_banned = True
 
     def restore(self):
@@ -64,6 +64,10 @@ class DiscoveredPeer():
 
     def presence(self):
         self.available_time = time.time()
+        if self.is_banned and self.successive_fails == 0:
+            self.restore()
+        elif self.is_banned and self.successive_fails > 0:
+            self.successive_fails -= 1
 
     @property
     def is_available(self):
@@ -87,7 +91,7 @@ class Topology(ControllerModule, CFX):
         nid = self.node_id
         for olid in self._cfx_handle.query_param("Overlays"):
             max_wrk_ld = int(self.config["Overlays"][olid].get("MaxConcurrentEdgeSetup", 3))
-            self._net_ovls[olid] = dict(RelinkCount=1, NewPeerCount=0, 
+            self._net_ovls[olid] = dict(RelinkCount=1, NewPeerCount=0,
                                         NetBuilder=NetworkBuilder(self, olid, nid, max_wrk_ld),
                                         KnownPeers={}, NegoConnEdges=dict(), OndPeers=[])
         try:
@@ -193,8 +197,11 @@ class Topology(ControllerModule, CFX):
         elif params["UpdateType"] == "LnkEvConnected":
             self._net_ovls[olid]["KnownPeers"][peer_id].restore()
             self._do_topo_change_post(olid)
-        elif params["UpdateType"] == "LnkEvDisconnected" or \
-            params["UpdateType"] == "LnkEvDeauthorized":
+        #elif params["UpdateType"] == "LnkEvDisconnected" or \
+        #    params["UpdateType"] == "LnkEvDeauthorized":
+        elif params["UpdateType"] == "LnkEvDisconnected":
+            pass
+        elif params["UpdateType"] == "LnkEvDeauthorized":
             self._net_ovls[olid]["KnownPeers"][peer_id].exclude()
             self.top_log("Excluding peer {0} until {1}".
                          format(peer_id, datetime.fromtimestamp(
@@ -407,13 +414,14 @@ class Topology(ControllerModule, CFX):
                       "MaxLongDistEdges": max_ldl, "MaxOnDemandEdges": max_ond}
             gb = GraphBuilder(params, top=self)
             curr_adjl = nb.get_adj_list()
-            #rlc = net_ovl["RelinkCount"]
-            #if (len(curr_adjl) / rlc <= 0.5) or (len(curr_adjl) / rlc >= 1.5):
-            #    # time to relink
-            #    net_ovl["RelinkCount"] = len(curr_adjl) if curr_adjl else 1
-            #    curr_adjl = ng.ConnEdgeAdjacenctList(olid, self.node_id)
-            #    self.log("LOG_DEBUG", "RELINKing!")
-            adjl = gb.build_adj_list(peer_list, curr_adjl, net_ovl["OndPeers"])
+            rlc = net_ovl["RelinkCount"]
+            is_relink = False
+            if (len(peer_list) / rlc <= 0.5) or (len(peer_list) / rlc >= 1.5):
+                # time to relink
+                net_ovl["RelinkCount"] = len(peer_list) if peer_list else 1
+                is_relink = True
+                self.log("LOG_INFO", "RELINKing!")
+            adjl = gb.build_adj_list(peer_list, curr_adjl, net_ovl["OndPeers"], is_relink)
             nb.refresh(adjl)
         else:
             self.register_cbt("Logger", "LOG_DEBUG", "TOP resuming Netbuilder refresh...")

@@ -45,6 +45,7 @@ class GraphBuilder():
         self._nodes = []
         self._my_idx = 0
         self._top = top
+        self._relink = False
 
     def _build_enforced(self, adj_list):
         for peer_id in self._enforced:
@@ -117,7 +118,9 @@ class GraphBuilder():
         #        peer_id not in adj_list:
         #        adj_list[peer_id] = ConnectionEdge(peer_id, ce.edge_id, ce.edge_type)
         # evaluate existing ldl
-        ldlnks = transition_adj_list.edges_bytype(["CETypeLongDistance"])
+        ldlnks = {}
+        if not self._relink:
+            transition_adj_list.edges_bytype(["CETypeLongDistance"])
         num_existing_ldl = 0
         for peer_id, ce in ldlnks.items():
             if ce.edge_state in ["CEStateConnected"] and \
@@ -156,7 +159,8 @@ class GraphBuilder():
                 adj_list[peer_id] = ond[peer_id]
         request_list.clear()
 
-    def build_adj_list(self, peers, transition_adj_list, request_list=None):
+    def build_adj_list(self, peers, transition_adj_list, request_list=None, relink=False):
+        self._relink = relink
         self._prep(peers)
         if request_list is None:
             request_list = []
