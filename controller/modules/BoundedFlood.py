@@ -25,9 +25,11 @@ except ImportError:
     import json
 import socket
 import time
+import threading
 import struct
 import uuid
 from distutils import spawn
+import os
 import subprocess
 from ryu.base import app_manager
 from ryu.controller import ofp_event
@@ -42,13 +44,16 @@ from ryu.lib import mac as mac_lib
 from ryu.topology import event, switches
 from ryu.topology.api import get_switch
 
+# The differences among the ordering of observed events (in particular port del/del/add vs
+# del/add/del) coming from RYU continue to be problematic when system is under frequent updates.
 CONFIG = {
     "OverlayId": "101000F",
     "BridgeName": "ipopbr101000F",
     "LogFile": "/var/log/ipop-vpn/ring-route.log",
     "LogLevel": "INFO",
     "FlowIdleTimeout": 60,
-    "MonitorInterval": 60
+    "MonitorInterval": 60,
+    "DemandThreshold": "160M"
     }
 def runcmd(cmd):
     """ Run a shell command. if fails, raise an exception. """
@@ -71,7 +76,8 @@ class netNode():
         self.counters = {}
         self.ryu = ryu_app
         self.logger = ryu_app.logger
-        self.traffic_analyzer = TrafficAnalyzer(self.logger)
+        self.config = ryu_app.config
+        self.traffic_analyzer = TrafficAnalyzer(self.logger, ryu_app.config["DemandThreshold"])
         self.update_node_id()
 
     def __repr__(self):
@@ -111,8 +117,8 @@ class netNode():
     @property
     def peer_list(self):
         pl = []
-        for entry in self.mac_local_to_peer.values():
-            pl.append(entry[1])
+        for entry in self.links.values():
+            pl.append(entry[2])
         return pl
 
     def update(self, tapn=None):
@@ -131,8 +137,8 @@ class netNode():
             self.switch = sw[0]
         self.logger.info("+ Updated switch %s", self.switch)
 
-    def update_ipop_topology(self, tapn):
-        olid = CONFIG["OverlayId"]
+    def update_ipop_topology(self, tapn=None):
+        olid = self.config["OverlayId"]
         req = dict(Request=dict(Action="GetTunnels", Params={"OverlayId": olid}))
         resp = self._send_recv(self.addr, req)
         if resp and resp["Response"]["Status"]:
@@ -158,8 +164,13 @@ class netNode():
 
             self.logger.info("+ Updated mac_local_to_peer %s", self.mac_local_to_peer)
         else:
-            self.logger.warning("- Failed to update topo for node:%s dpid:%s",
-                                self.node_id, self.datapath.id)
+            msg = "No response from IPOP CController"
+            if resp:
+                msg = resp["Response"]
+            self.logger.warning("- Failed to update topo for node:%s dpid:%s, response:%s",
+                                self.node_id, self.datapath.id, msg)
+
+
 
     def update_links(self):
         self.links.clear()
@@ -176,8 +187,14 @@ class netNode():
 
     def delete_port(self, ofpport):
         port_no = ofpport.port_no
-        prt = switches.Port(self.datapath.id, self.datapath.ofproto, ofpport)
-        self.switch.ports.remove(prt)
+        #prt = switches.Port(self.datapath.id, self.datapath.ofproto, ofpport)
+        #self.switch.ports.remove(prt)
+        try:
+            self.switch.del_port(ofpport)
+        except ValueError as err:
+            # RYU events are delivered inconsistently when using both the newer topo with the older
+            # events. Ex. legacy:DEL port, DEL port ADD Port, topo: DEL port, ADD port, DEL port
+            self.logger.warning("Port %s already removed. ValueError=%s", ofpport, str(err))
         td = self.links.get(port_no)
         if td:
             self.mac_local_to_peer.pop(td[0], None)
@@ -186,7 +203,7 @@ class netNode():
         self.logger.info("Deleted port %d, NetNode=%s", port_no, self)
 
     def req_add_tunnel(self, peer_id):
-        olid = CONFIG["OverlayId"]
+        olid = self.config["OverlayId"]
         req = dict(Request=dict(Action="TunnelRquest", Params=dict(OverlayId=olid,
                                                                    PeerId=peer_id,
                                                                    Operation="ADD")))
@@ -194,7 +211,7 @@ class netNode():
         self.logger.info("ADD OnDemand tunnel Response={}".format(resp))
 
     def req_remove_tunnel(self, peer_id):
-        olid = CONFIG["OverlayId"]
+        olid = self.config["OverlayId"]
         req = dict(Request=dict(Action="TunnelRquest", Params=dict(OverlayId=olid,
                                                                    PeerId=peer_id,
                                                                    Operation="Remove")))
@@ -255,6 +272,7 @@ class LearningTable():
         self.peersw_tbl = {}     # table of peer switches (index: peer sw node id)
         self.rootsw_tbl = {}     # table of leaf mac to host root switch
         self.logger = ryu.logger
+        self.config = ryu.config
         self._ts_tbl = {}        # used to expire old leaf entries
 
     def __contains__(self, key_mac):
@@ -276,12 +294,12 @@ class LearningTable():
         ts = self._ts_tbl.get(key_mac, None)
         if not ts:
             return
-        if ts <= now - CONFIG["FlowIdleTimeout"]:
+        if ts <= now - self.config["FlowIdleTimeout"]:
             self.ingress_tbl.pop(key_mac, None)
             rsw = self.rootsw_tbl.pop(key_mac, None)
             if rsw:
                 rsw.leaf_macs.discard(key_mac)
-                self.logger.info("popped client mac {0} rsw {1}".format(key_mac, rsw))
+                self.logger.info("Removed client mac {0} from rootsw_tbl {1}".format(key_mac, rsw))
             return
         self._ts_tbl[key_mac] = now
 
@@ -395,11 +413,25 @@ class BoundedFlood(app_manager.RyuApp):
         super(BoundedFlood, self).__init__(*args, **kwargs)
         self.monitor_thread = hub.spawn(self._monitor)
         ethernet.ethernet.register_packet_type(FloodRouteBound, FloodRouteBound.ETH_TYPE_BF)
+        self.config = CONFIG
         self.lt = LearningTable(self)   # The local nodes learning table
         self.nodes = dict()             # net node instance for datapath
         self.flooding_bounds = dict()   # flooding bounds instance for datapath
-        self.idle_timeout = CONFIG["FlowIdleTimeout"]
-        self.monitor_interval = CONFIG["MonitorInterval"]
+        self.load_config()
+        self.idle_timeout = self.config["FlowIdleTimeout"]
+        self.monitor_interval = self.config["MonitorInterval"]
+        self._lock = threading.Lock()
+
+    def load_config(self):
+        cfg = {}
+        config_filename = "/etc/opt/ipop-vpn/bf-cfg.json"
+        if not os.path.isfile(config_filename):
+            self.logger.error("The Specified configuration file was not found %s", config_filename)
+            return
+        with open(config_filename) as cfg_file:
+            cfg = json.load(cfg_file)
+            self.config.update(cfg)
+        self.logger.error("BF config %s\nloaded cfg %s", self.config, cfg)
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER) # pylint: disable=no-member
     def switch_features_handler(self, ev):
@@ -450,21 +482,22 @@ class BoundedFlood(app_manager.RyuApp):
         ofp = dp.ofproto
         port_no = msg.desc.port_no
         node = self.nodes[dp.id]
-        if msg.reason == ofp.OFPPR_ADD:
-            self.logger.info("OFPPortStatus: port ADDED desc=%s", msg.desc)
-            self.update_net_node(dp, msg.desc.name.decode("utf-8"))
-            self.lt.leaf_ports = node.leaf_ports()
-            self.lt.register_peer_switch(node.peer_id(port_no), port_no)
-            self.do_bf_leaf_transfer(dp, msg.desc.port_no)
-        elif msg.reason == ofp.OFPPR_DELETE:
-            self.logger.info("OFPPortStatus: port DELETED desc=%s", msg.desc)
-            self.del_flows_port(dp, port_no, tblid=0)
-            self.lt.unregister_peer_switch(node.peer_id(port_no))
-            self.net_node_del_port(dp, msg.desc)
-            self.lt.leaf_ports = node.leaf_ports()
-            self.lt.forget()
-        elif msg.reason == ofp.OFPPR_MODIFY:
-            self.logger.debug("OFPPortStatus: port MODIFIED desc=%s", msg.desc)
+        with self._lock:
+            if msg.reason == ofp.OFPPR_ADD:
+                self.logger.info("OFPPortStatus: port ADDED desc=%s", msg.desc)
+                self.update_net_node(dp, msg.desc.name.decode("utf-8"))
+                self.lt.leaf_ports = node.leaf_ports()
+                self.lt.register_peer_switch(node.peer_id(port_no), port_no)
+                self.do_bf_leaf_transfer(dp, msg.desc.port_no)
+            elif msg.reason == ofp.OFPPR_DELETE:
+                self.logger.info("OFPPortStatus: port DELETED desc=%s", msg.desc)
+                self.del_flows_port(dp, port_no, tblid=0)
+                self.lt.unregister_peer_switch(node.peer_id(port_no))
+                self.net_node_del_port(dp, msg.desc)
+                self.lt.leaf_ports = node.leaf_ports()
+                self.lt.forget()
+            elif msg.reason == ofp.OFPPR_MODIFY:
+                self.logger.debug("OFPPortStatus: port MODIFIED desc=%s", msg.desc)
 
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER) # pylint: disable=no-member
     def _packet_in_handler(self, ev):
@@ -479,35 +512,36 @@ class BoundedFlood(app_manager.RyuApp):
         dst = eth.dst
         src = eth.src
         dpid = datapath.id
-
-        if eth.ethertype == 0xc0c0:
-            self.handle_bounded_flood_msg(datapath, pkt, in_port, msg)
-        elif dst in self.lt:
-            out_port = self.lt[dst]
-            # learn a mac address
-            self.lt[src] = in_port
-            # create new flow rule
-            actions = [parser.OFPActionOutput(out_port)]
-            match = parser.OFPMatch(in_port=in_port, eth_dst=dst, eth_src=src)
-            self.add_flow(datapath, match, actions, priority=1, tblid=0, idle=self.idle_timeout)
-            if msg.buffer_id == ofproto.OFP_NO_BUFFER:
-                data = msg.data
-            out = parser.OFPPacketOut(datapath=datapath, buffer_id=msg.buffer_id,
-                                      in_port=in_port, actions=actions, data=data)
-            datapath.send_msg(out)
-        else:
-            # this dst mac is not in our LT
-            self.logger.debug("Default packet in %s %s %s %s", dpid, src, dst, in_port)
-            self.lt[src] = in_port
-            #perform bounded flood same as leaf case
-            fld = self.flooding_bounds.get(dpid, None)
-            if not fld:
-                fld = FloodingBounds(self.nodes[dpid])
-                self.flooding_bounds[dpid] = fld
-            out_bounds = fld.bounds(None, [in_port])
-            self.logger.info("<--\nGenerated FRB(s)=%s", out_bounds)
-            if out_bounds:
-                self.do_bounded_flood(datapath, in_port, out_bounds, src, msg.data)
+        with self._lock:
+            if eth.ethertype == 0xc0c0:
+                self.handle_bounded_flood_msg(datapath, pkt, in_port, msg)
+            elif dst in self.lt:
+                out_port = self.lt[dst]
+                # learn a mac address
+                self.lt[src] = in_port
+                # create new flow rule
+                actions = [parser.OFPActionOutput(out_port)]
+                match = parser.OFPMatch(in_port=in_port, eth_dst=dst, eth_src=src)
+                self.add_flow(datapath, match, actions, priority=1, tblid=0,
+                              idle=self.idle_timeout)
+                if msg.buffer_id == ofproto.OFP_NO_BUFFER:
+                    data = msg.data
+                out = parser.OFPPacketOut(datapath=datapath, buffer_id=msg.buffer_id,
+                                          in_port=in_port, actions=actions, data=data)
+                datapath.send_msg(out)
+            else:
+                # this dst mac is not in our LT
+                self.logger.debug("Default packet in %s %s %s %s", dpid, src, dst, in_port)
+                self.lt[src] = in_port
+                #perform bounded flood same as leaf case
+                fld = self.flooding_bounds.get(dpid, None)
+                if not fld:
+                    fld = FloodingBounds(self.nodes[dpid])
+                    self.flooding_bounds[dpid] = fld
+                out_bounds = fld.bounds(None, [in_port])
+                self.logger.info("<--\nGenerated FRB(s)=%s", out_bounds)
+                if out_bounds:
+                    self.do_bounded_flood(datapath, in_port, out_bounds, src, msg.data)
 
     @set_ev_cls(ofp_event.EventOFPFlowStatsReply, MAIN_DISPATCHER) # pylint: disable=no-member
     def _flow_stats_reply_handler(self, ev):
@@ -611,12 +645,14 @@ class BoundedFlood(app_manager.RyuApp):
         #if not resp:
         #    self.logger.warning("Delete flow operation failed, egress=%s, OFPFlowMod=%s",
         #                        port_no, mod)
-        resp = runcmd([BoundedFlood.OFCTL, "del-flows", CONFIG["BridgeName"],
-                                 "in_port={0}".format(port_no)])
-        self.logger.warning(resp.stdout.decode("utf-8") + "::" + resp.stderr.decode("utf-8"))
-        resp = runcmd([BoundedFlood.OFCTL, "del-flows", CONFIG["BridgeName"],
-                                 "out_port={0}".format(port_no)])
-        self.logger.warning(resp.stdout.decode("utf-8") + "::" + resp.stderr.decode("utf-8"))
+        resp = runcmd([BoundedFlood.OFCTL, "del-flows", self.config["BridgeName"],
+                       "in_port={0}".format(port_no)])
+        self.logger.warning("::Used OVS del-flow in_port=%s", port_no)
+        resp = runcmd([BoundedFlood.OFCTL, "del-flows", self.config["BridgeName"],
+                       "out_port={0}".format(port_no)])
+        self.logger.warning("::Used OVS del-flow out_port=%s", port_no)
+
+        #self.logger.warning(resp.stdout.decode("utf-8") + "::" + resp.stderr.decode("utf-8"))
 
     def update_flow_match_dstmac(self, datapath, dst_mac, new_egress, tblid=None):
         self.logger.debug("Updating all flows matching dst mac %s", dst_mac)
@@ -914,8 +950,16 @@ class TrafficAnalyzer():
     """ A very simple traffic analyzer to trigger an on demand tunnel """
     _DEMAND_THRESHOLD = 1<<23 # 80MB
     def __init__(self, logger, demand_threshold=None):
-        self.demand_threshold = demand_threshold if demand_threshold else \
-            TrafficAnalyzer._DEMAND_THRESHOLD
+        if demand_threshold:
+            if demand_threshold[-1] == "K":
+                val = int(demand_threshold[:-1]) * 1<<10
+            if demand_threshold[-1] == "M":
+                val = int(demand_threshold[:-1]) * 1<<20
+            if demand_threshold[-1] == "G":
+                val = int(demand_threshold[:-1]) * 1<<30
+            self.demand_threshold = val
+        else:
+            self.demand_threshold = TrafficAnalyzer._DEMAND_THRESHOLD
         self.ond = set()
         self.logger = logger
         logger.info("Demand threshold set at %d bytes", self.demand_threshold)

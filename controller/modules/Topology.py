@@ -81,6 +81,12 @@ class Topology(ControllerModule, CFX):
         self._topo_changed_publisher = None
 
     def __repr__(self):
+        for olid in self._net_ovls:
+            num_avail = 0
+            for peer in self._net_ovls[olid]["KnownPeers"].values():
+                if peer.is_available:
+                    num_avail += 1
+            self._net_ovls[olid]["NumAvailblePeers"] = num_avail
         state = "Topology<%s>" % (self._net_ovls)
         return state
 
@@ -91,9 +97,10 @@ class Topology(ControllerModule, CFX):
         nid = self.node_id
         for olid in self._cfx_handle.query_param("Overlays"):
             max_wrk_ld = int(self.config["Overlays"][olid].get("MaxConcurrentEdgeSetup", 3))
-            self._net_ovls[olid] = dict(RelinkCount=1, NewPeerCount=0,
+            self._net_ovls[olid] = dict(RelinkCount=1, NewPeerCount=0, NumAvailblePeers=0,
                                         NetBuilder=NetworkBuilder(self, olid, nid, max_wrk_ld),
-                                        KnownPeers={}, NegoConnEdges=dict(), OndPeers=[])
+                                        KnownPeers=dict(), NegoConnEdges=dict(),
+                                        OndPeers=[])
         try:
             # Subscribe for data request notifications from OverlayVisualizer
             self._cfx_handle.start_subscription("OverlayVisualizer",
@@ -404,7 +411,7 @@ class Topology(ControllerModule, CFX):
             max_succ = int(ovl_cfg.get("MaxSuccessors", 1))
             max_ond = int(ovl_cfg.get("MaxOnDemandEdges", 2))
             num_peers = len(peer_list) if len(peer_list) > 1 else 2
-            max_ldl = int(ovl_cfg.get("MaxLongDistEdges", math.floor(math.log(num_peers+1, 2))))
+            max_ldl = int(ovl_cfg.get("MaxLongDistEdges", math.ceil(math.log(num_peers+1, 2))))
             manual_topo = ovl_cfg.get("ManualTopology", False)
             if self.config["Overlays"][olid].get("Role", "Switch").casefold() == \
                 "leaf".casefold():
@@ -421,7 +428,7 @@ class Topology(ControllerModule, CFX):
                 net_ovl["RelinkCount"] = len(peer_list) if peer_list else 1
                 is_relink = True
                 self.log("LOG_INFO", "RELINKing!")
-            adjl = gb.build_adj_list(peer_list, curr_adjl, net_ovl["OndPeers"], is_relink)
+            adjl = gb.build_adj_list(peer_list, curr_adjl, net_ovl["OndPeers"], relink=False)
             nb.refresh(adjl)
         else:
             self.register_cbt("Logger", "LOG_DEBUG", "TOP resuming Netbuilder refresh...")

@@ -118,7 +118,8 @@ class Switch(object):
             self.ports.append(port)
 
     def del_port(self, ofpport):
-        self.ports.remove(Port(ofpport))
+        prt = Port(self.dp.id, self.dp.ofproto, ofpport)
+        self.ports.remove(prt)
 
     def to_dict(self):
         d = {'dpid': dpid_to_str(self.dp.id),
@@ -730,7 +731,7 @@ class Switches(app_manager.RyuApp):
             #    self.lldp_event.set()
 
             #self.port_state[dp.id].remove(ofpport.port_no)
-            LOG.info('Using ken\'s remove port fix')
+            LOG.info('ken remove port {}'.format(Port(dp.id, dp.ofproto, ofpport)))
             if self.link_discovery:
                 port = self._get_port(dp.id, ofpport.port_no)
                 if port and not port.is_reserved():

@@ -120,7 +120,7 @@ class GraphBuilder():
         # evaluate existing ldl
         ldlnks = {}
         if not self._relink:
-            transition_adj_list.edges_bytype(["CETypeLongDistance"])
+            ldlnks = transition_adj_list.edges_bytype(["CETypeLongDistance"])
         num_existing_ldl = 0
         for peer_id, ce in ldlnks.items():
             if ce.edge_state in ["CEStateConnected"] and \
