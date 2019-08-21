@@ -141,14 +141,16 @@ class LinkManager(ControllerModule):
         if new_inf_name:
             ign_tap_names.add(new_inf_name)
 
-        #if self.config["Overlays"][overlay_id].get("AllowRecursiveTunneling", False):
-        #    # Ignore ALL the ipop tap devices (regardless of their overlay id/link id)
-        #    for tnlid in self._tunnels:
-        #        if self._tunnels[tnlid].tap_name:
-        #            ign_tap_names.add(
-        #                self._tunnels[tnlid].tap_name)
-        ign_tap_names \
-            |= self._ignored_net_interfaces[overlay_id]
+        if not self.config["Overlays"][overlay_id].get("AllowRecursiveTunneling", False):
+            # Ignore ALL the ipop tap devices (regardless of their overlay id/link id)
+            for tnlid in self._tunnels:
+                if self._tunnels[tnlid].tap_name:
+                    ign_tap_names.add(
+                        self._tunnels[tnlid].tap_name)
+            for tap_name in self._ignored_net_interfaces.values():
+                ign_tap_names |= tap_name
+        else:
+            ign_tap_names |= self._ignored_net_interfaces[overlay_id]
         return ign_tap_names
 
     def is_complete_link(self, tnlid):
@@ -181,7 +183,6 @@ class LinkManager(ControllerModule):
             self._tunnels[tnlid].tunnel_state == Tunnel.STATES.TNL_OFFLINE:
             tn = self._tunnels[tnlid].tap_name
             params = {"OverlayId": olid, "TunnelId": tnlid, "PeerId": peer_id, "TapName": tn}
-            #self.register_cbt("TincanInterface", "TCI_REMOVE_TUNNEL", params)
             rtnl_cbt = self.create_linked_cbt(cbt)
             rtnl_cbt.set_request(self.module_name, "TincanInterface", "TCI_REMOVE_TUNNEL", params)
             self.submit_cbt(rtnl_cbt)

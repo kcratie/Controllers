@@ -34,7 +34,7 @@ class GraphBuilder():
         self._node_id = cfg["NodeId"]
         self._peers = None
         # enforced is a list of peer ids that should always have a direct edge
-        self._enforced = cfg.get("EnforcedEdges", [])
+        self._enforced_edges = cfg.get("EnforcedEdges", [])
         # only create edges from the enforced list
         self._manual_topo = cfg.get("ManualTopology", False)
         self._max_successors = int(cfg["MaxSuccessors"])
@@ -46,9 +46,12 @@ class GraphBuilder():
         self._my_idx = 0
         self._top = top
         self._relink = False
+        if self._manual_topo and not self._enforced_edges:
+            self._top.log("LOG_WARNING", "Ad hoc topology specified but no peers are"
+                          "provided, config=%s", cfg)
 
     def _build_enforced(self, adj_list):
-        for peer_id in self._enforced:
+        for peer_id in self._enforced_edges:
             ce = ConnectionEdge(peer_id, edge_type="CETypeEnforced")
             adj_list.add_conn_edge(ce)
 
@@ -182,7 +185,7 @@ class GraphBuilder():
         adj_list = ConnEdgeAdjacenctList(self.overlay_id, self._node_id,
                                          self._max_successors, self._max_ldl_cnt, self._max_ond)
         for peer_id in self._peers:
-            if self._enforced and peer_id in self._enforced:
+            if self._enforced_edges and peer_id in self._enforced_edges:
                 ce = ConnectionEdge(peer_id)
                 ce.edge_type = "CETypeEnforced"
                 adj_list.add_conn_edge(ce)

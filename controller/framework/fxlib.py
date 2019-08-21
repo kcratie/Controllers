@@ -20,8 +20,8 @@
 # THE SOFTWARE.
 
 IPOP_VER_MJR = "19"
-IPOP_VER_MNR = "05"
-IPOP_VER_REV = "05"
+IPOP_VER_MNR = "11"
+IPOP_VER_REV = "01"
 IPOP_VER_REL = "{0}.{1}.{2}".format(IPOP_VER_MJR, IPOP_VER_MNR, IPOP_VER_REV)
 
 CONFIG = {
@@ -66,7 +66,7 @@ CONFIG = {
         "TimerInterval": 30,
         "CacheExpiry": 30,          # Min duration an entry remains in the JID cache in seconds
         "Dependencies": ["Logger"],
-        "PresenceInterval": 30     # seconds between presence broadcast
+        "PresenceInterval": 30      # seconds between presence broadcast
     },
     "LinkManager": {
         "Enabled": True,
@@ -79,6 +79,10 @@ CONFIG = {
         "TimerInterval": 30,
         "PeerDiscoveryCoalesce": 3,
         "ExclusionBaseInterval": 240,
+        "MaxSuccessors": 2,
+        "MaxOnDemandEdges": 1,
+        "MaxConcurrentEdgeSetup": 2,
+        "Role": "Switch",
         "Dependencies": ["Logger", "TincanInterface", "LinkManager"]
     },
     "BridgeController": {

@@ -278,8 +278,6 @@ class BridgeController(ControllerModule):
         super(BridgeController, self).__init__(cfx_handle, module_config, module_name)
         self._server = None
         self._server_thread = None
-        #self._adj_lists = dict()
-        #self._is_updating = False
 
         self._ovl_net = dict()
         self._guest = dict()
@@ -299,36 +297,42 @@ class BridgeController(ControllerModule):
         for olid in self.overlays:
             self._tunnels[olid] = dict()
             br_cfg = self.overlays[olid]
-
-            if self.overlays[olid]["Type"] == LinuxBridge.bridge_type:
+            ign_br_names[olid] = set()
+            device_role = self.overlays[olid].get("Role", "Switch").casefold()
+            if device_role == "leaf".casefold():
+                self._ovl_net[olid] = VNIC(br_cfg["IP4"], br_cfg["PrefixLen"],
+                                           br_cfg.get("MTU", 1410), self)
+            elif device_role == "switch".casefold() and \
+                self.overlays[olid]["Type"] == LinuxBridge.bridge_type:
                 self._ovl_net[olid] = LinuxBridge(br_cfg["BridgeName"][:8] + olid[:7],
                                                   br_cfg["IP4"],
                                                   br_cfg["PrefixLen"],
                                                   br_cfg.get("MTU", 1410), self,
                                                   br_cfg.get("STP", True))
 
-            elif self.overlays[olid]["Type"] == OvsBridge.bridge_type:
+            elif device_role == "switch".casefold() and \
+                self.overlays[olid]["Type"] == OvsBridge.bridge_type:
                 self._ovl_net[olid] = OvsBridge(br_cfg["BridgeName"][:8] + olid[:7],
                                                 None,
                                                 None,
                                                 br_cfg.get("MTU", 1410), self,
                                                 br_cfg.get("STP", True),
                                                 sdn_ctrl_cfg=br_cfg.get("SDNController", {}))
-                ign_br_names[olid] = set()
-                ign_br_names[olid].add(self._ovl_net[olid].name)
                 name = self._create_guest_bridge(olid, br_cfg)
                 ign_br_names[olid].add(name)
 
-            self.register_cbt("LinkManager",
-                              "LNK_ADD_IGN_INF", ign_br_names)
-        try:
-            # Subscribe for data request notifications from OverlayVisualizer
-            self._cfx_handle.start_subscription("OverlayVisualizer", "VIS_DATA_REQ")
-        except NameError as err:
-            if "OverlayVisualizer" in str(err):
-                self.register_cbt("Logger", "LOG_WARNING",
-                                  "OverlayVisualizer module not loaded."
-                                  " Visualization data will not be sent.")
+            ign_br_names[olid].add(self._ovl_net[olid].name)
+            self.log("LOG_DEBUG", "ignored bridges=%s", ign_br_names)
+
+        self.register_cbt("LinkManager", "LNK_ADD_IGN_INF", ign_br_names)
+        #try:
+        #    # Subscribe for data request notifications from OverlayVisualizer
+        #    self._cfx_handle.start_subscription("OverlayVisualizer", "VIS_DATA_REQ")
+        #except NameError as err:
+        #    if "OverlayVisualizer" in str(err):
+        #        self.register_cbt("Logger", "LOG_WARNING",
+        #                          "OverlayVisualizer module not loaded."
+        #                          " Visualization data will not be sent.")
 
         self._cfx_handle.start_subscription("LinkManager", "LNK_TUNNEL_EVENTS")
         self.register_cbt("Logger", "LOG_INFO", "Module Loaded")

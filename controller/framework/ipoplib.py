@@ -100,18 +100,6 @@ CTL_CREATE_LINK = {
         }
     }
 }
-INSERT_TAP_PACKET = {
-    "IPOP": {
-        "ProtocolVersion": 5,
-        "TransactionId": 0,
-        "ControlType": "TincanRequest",
-        "Request": {
-            "Command": "InjectFrame",
-            "OverlayId": "",
-            "Data": "encoded_string"
-        }
-    }
-}
 CTL_REMOVE_TUNNEL = {
     "IPOP": {
         "ProtocolVersion": 5,

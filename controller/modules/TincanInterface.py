@@ -159,15 +159,6 @@ class TincanInterface(ControllerModule):
         req["IgnoredNetInterfaces"] = msg.get("IgnoredNetInterfaces")
         self.send_control(json.dumps(ctl))
 
-    def req_handler_inject_frame(self, cbt):
-        msg = cbt.request.params
-        ctl = ipoplib.INSERT_TAP_PACKET
-        ctl["IPOP"]["TransactionId"] = cbt.tag
-        req = ctl["IPOP"]["Request"]
-        req["OverlayId"] = msg["OverlayId"]
-        req["Data"] = msg["Data"]
-        self.send_control(json.dumps(ctl))
-
     def req_handler_query_candidate_address_set(self, cbt):
         msg = cbt.request.params
         ctl = ipoplib.CTL_QUERY_CAS
@@ -224,9 +215,6 @@ class TincanInterface(ControllerModule):
 
             elif cbt.request.action == "TCI_CREATE_TUNNEL":
                 self.req_handler_create_tunnel(cbt)
-
-            elif cbt.request.action == "TCI_INJECT_FRAME":
-                self.req_handler_inject_frame(cbt)
 
             elif cbt.request.action == "TCI_QUERY_CAS":
                 self.req_handler_query_candidate_address_set(cbt)

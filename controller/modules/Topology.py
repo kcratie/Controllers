@@ -399,7 +399,7 @@ class Topology(ControllerModule, CFX):
             net_ovl["NewPeerCount"] = 0
             ovl_cfg = self.config["Overlays"][olid]
             self.register_cbt("Logger", "LOG_DEBUG", "Netbuilder initiating refresh ...")
-            enf_lnks = ovl_cfg.get("EnforcedLinks", [])
+            enf_lnks = ovl_cfg.get("EnforcedEdges", [])
             peer_list = [peer_id for peer_id in net_ovl["KnownPeers"] \
                 if net_ovl["KnownPeers"][peer_id].is_available]
             #peer_list = [*net_ovl["KnownPeers"].keys()]
@@ -424,14 +424,14 @@ class Topology(ControllerModule, CFX):
             rlc = net_ovl["RelinkCount"]
             is_relink = False
             if (len(peer_list) / rlc <= 0.5) or (len(peer_list) / rlc >= 1.5):
-                # time to relink
+                # perform relink op for LDL
                 net_ovl["RelinkCount"] = len(peer_list) if peer_list else 1
                 is_relink = True
                 self.log("LOG_INFO", "RELINKing!")
             adjl = gb.build_adj_list(peer_list, curr_adjl, net_ovl["OndPeers"], relink=False)
             nb.refresh(adjl)
         else:
-            self.register_cbt("Logger", "LOG_DEBUG", "TOP resuming Netbuilder refresh...")
+            self.log("LOG_DEBUG", "Resuming Netbuilder refresh")
             nb.refresh()
 
     def _authorize_edge(self, overlay_id, peer_id, edge_id, parent_cbt):
