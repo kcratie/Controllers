@@ -43,18 +43,24 @@ from ryu.lib import hub
 from ryu.lib import mac as mac_lib
 from ryu.topology import event, switches
 from ryu.topology.api import get_switch
+import logging
+import logging.handlers as lh
 
 # The differences among the ordering of observed events (in particular port del/del/add vs
 # del/add/del) coming from RYU continue to be problematic when system is under frequent updates.
 CONFIG = {
     "OverlayId": "101000F",
     "BridgeName": "ipopbr101000F",
-    "LogFile": "/var/log/ipop-vpn/ring-route.log",
+    "DemandThreshold": "100M",
+    "LogFile": "/var/log/ipop-vpn/bf.log",
     "LogLevel": "INFO",
     "FlowIdleTimeout": 60,
-    "MonitorInterval": 60,
-    "DemandThreshold": "160M"
+    "MaxBytes": 10000000,
+    "BackupCount": 0,
+    "SdniPort": 5802,
+    "MonitorInterval": 60
     }
+
 def runcmd(cmd):
     """ Run a shell command. if fails, raise an exception. """
     if cmd[0] is None:
@@ -63,20 +69,18 @@ def runcmd(cmd):
     return p
 
 class netNode():
-    SDNI_PORT = 5802
     def __init__(self, datapath, ryu_app):
         self.datapath = datapath
-        self.addr = (datapath.address[0], netNode.SDNI_PORT)
+        self.logger = ryu_app.logger
+        self.config = ryu_app.config
+        self.addr = (datapath.address[0], self.config["SdniPort"])
         self.node_id = None
-        #self.topo = None
         self._leaf_prts = None
         self.switch = None
         self.links = {} # maps port no to tuple (local_mac, peer_mac, peer_id)
         self.mac_local_to_peer = {}
         self.counters = {}
         self.ryu = ryu_app
-        self.logger = ryu_app.logger
-        self.config = ryu_app.config
         self.traffic_analyzer = TrafficAnalyzer(self.logger, ryu_app.config["DemandThreshold"])
         self.update_node_id()
 
@@ -407,7 +411,6 @@ class LearningTable():
 ###################################################################################################
 class BoundedFlood(app_manager.RyuApp):
     OFP_VERSIONS = [ofproto_v1_4.OFP_VERSION]
-    SDNI_PORT = 5802
     OFCTL = spawn.find_executable("ovs-ofctl")
     def __init__(self, *args, **kwargs):
         super(BoundedFlood, self).__init__(*args, **kwargs)
@@ -421,17 +424,32 @@ class BoundedFlood(app_manager.RyuApp):
         self.idle_timeout = self.config["FlowIdleTimeout"]
         self.monitor_interval = self.config["MonitorInterval"]
         self._lock = threading.Lock()
+        self._setup_logger()
+
+    def _setup_logger(self):
+        fqname = self.config["LogFilename"]
+        if os.path.isfile(fqname):
+            os.remove(fqname)
+        self.logger = logging.getLogger("ryu.base.app_manager")
+        level = getattr(logging, self.config["LogLevel"])
+        self.logger.setLevel(level)
+        handler = lh.RotatingFileHandler(filename=fqname, maxBytes=self.config["MaxBytes"],
+                                         backupCount=self.config["BackupCount"])
+        formatter = logging.Formatter(
+            "%(asctime)s.%(msecs)03d %(levelname)s: %(message)s", datefmt="%m%d %H:%M:%S")
+        handler.setFormatter(formatter)
+        self.logger.addHandler(handler)
 
     def load_config(self):
         cfg = {}
         config_filename = "/etc/opt/ipop-vpn/bf-cfg.json"
         if not os.path.isfile(config_filename):
-            self.logger.error("The Specified configuration file was not found %s", config_filename)
+            self.logger.error("The specified configuration file was not found %s. Using defaults",
+                              config_filename)
             return
         with open(config_filename) as cfg_file:
             cfg = json.load(cfg_file)
             self.config.update(cfg)
-        self.logger.error("BF config %s\nloaded cfg %s", self.config, cfg)
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER) # pylint: disable=no-member
     def switch_features_handler(self, ev):
@@ -550,7 +568,7 @@ class BoundedFlood(app_manager.RyuApp):
     ###################################################################################
     def _monitor(self):
         while True:
-            msg = str("@@>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>\n")
+            msg = ""
             for dpid in self.nodes:
                 self.nodes[dpid].counters["MaxFloodingHopCount"] = 0
                 total_hc = 0
@@ -572,12 +590,12 @@ class BoundedFlood(app_manager.RyuApp):
                 msg += "{0}\n".format(str(self.lt))
                 msg += "Max Flooding Hop Count {0}\n".\
                     format(self.nodes[dpid].counters.get("MaxFloodingHopCount", 1))
-                msg += "NPC={0}, THC={1}, AHC={2}\n".\
+                msg += "NPC={0}, THC={1}, AHC={2}".\
                     format(self.nodes[dpid].counters.get("NumPeersCounted", 0),
                            self.nodes[dpid].counters.get("TotalHopCount", 0),
                            self.nodes[dpid].counters.get("AvgFloodingHopCount", 0))
-            msg += str("<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<@@")
-            self.logger.info(msg)
+            if msg:
+                self.logger.info("@@>\n" + msg + "\n<@@")
             hub.sleep(self.monitor_interval)
 
     def request_stats(self, datapath, tblid=0):
