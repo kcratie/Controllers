@@ -238,7 +238,6 @@ class SDNIRequestHandler(socketserver.BaseRequestHandler):
             return
         task = json.loads(data.decode("utf-8"))
         task = self.process_task(task)
-        # todo: send response length as a prefix
         self.request.sendall(bytes(json.dumps(task) + "\n", "utf-8"))
 
     def process_task(self, task):
@@ -262,14 +261,32 @@ class SDNIRequestHandler(socketserver.BaseRequestHandler):
         return task
 
     def _handle_get_topo(self, task):
-        status = False
         olid = task["Request"]["Params"]["OverlayId"]
         topo = self.server.sdni.get_ovl_topo(olid)
-        if topo:
-            status = True
-        task["Response"] = dict(Status=status, Data=topo)
+        task["Response"] = dict(Status=True, Data=topo)
         return task
 
+###################################################################################################
+class VNIC(BridgeABC):
+    brctl = None
+    bridge_type = "VNIC"
+
+    def __init__(self, ip_addr, prefix_len, mtu, cm):
+        super(VNIC, self).__init__("VirtNic", ip_addr, prefix_len, mtu, cm)
+
+    def del_br(self):
+        pass
+
+    def add_port(self, port_name):
+        self.name = port_name
+        net = "{0}/{1}".format(self.ip_addr, self.prefix_len)
+        ipoplib.runshell([VNIC.iptool, "addr", "add", net, "dev", self.name])
+        ipoplib.runshell([VNIC.iptool, "link", "set", self.name, "mtu", str(self.mtu)])
+        ipoplib.runshell([VNIC.iptool, "link", "set", "dev", self.name, "up"])
+
+
+    def del_port(self, port_name):
+        pass
 
 ###################################################################################################
 

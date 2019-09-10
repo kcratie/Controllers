@@ -23,6 +23,7 @@ try:
     import simplejson as json
 except ImportError:
     import json
+import copy
 import socket
 import time
 import threading
@@ -31,34 +32,36 @@ import uuid
 from distutils import spawn
 import os
 import subprocess
+import logging
+import logging.handlers as lh
 from ryu.base import app_manager
 from ryu.controller import ofp_event
 from ryu.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER, DEAD_DISPATCHER
 from ryu.controller.handler import set_ev_cls
+from ryu.controller import dpset
 from ryu.ofproto import ofproto_v1_4
 from ryu.lib.packet import packet_base
 from ryu.lib.packet import packet
 from ryu.lib.packet import ethernet
 from ryu.lib import hub
 from ryu.lib import mac as mac_lib
-from ryu.topology import event, switches
-from ryu.topology.api import get_switch
-import logging
-import logging.handlers as lh
+from ryu.topology import event
 
 # The differences among the ordering of observed events (in particular port del/del/add vs
 # del/add/del) coming from RYU continue to be problematic when system is under frequent updates.
 CONFIG = {
-    "OverlayId": "101000F",
-    "BridgeName": "ipopbr101000F",
+    "OverlayId": "",
+    "BridgeName": "",
     "DemandThreshold": "100M",
-    "LogFile": "/var/log/ipop-vpn/bf.log",
+    "LogFilename": "/var/log/ipop-vpn/bf.log",
     "LogLevel": "INFO",
     "FlowIdleTimeout": 60,
     "MaxBytes": 10000000,
     "BackupCount": 0,
     "SdniPort": 5802,
-    "MonitorInterval": 60
+    "MonitorInterval": 60,
+    "EnableOnDemandTunnels": False,
+    "MaxOnDemandEdges": 1
     }
 
 def runcmd(cmd):
@@ -76,7 +79,7 @@ class netNode():
         self.addr = (datapath.address[0], self.config["SdniPort"])
         self.node_id = None
         self._leaf_prts = None
-        self.switch = None
+        self.port_state = None
         self.links = {} # maps port no to tuple (local_mac, peer_mac, peer_id)
         self.mac_local_to_peer = {}
         self.counters = {}
@@ -85,13 +88,17 @@ class netNode():
         self.update_node_id()
 
     def __repr__(self):
-        return ("node_id=%s, node_address=%s:%s, datapath_id=0x%016x, switch=%s" %
-                (self.node_id[:7], self.addr[0], self.addr[1], self.datapath.id, str(self.switch)))
+        return ("node_id=%s, node_address=%s:%s, datapath_id=0x%016x, ports=%s" %
+                (self.node_id[:7], self.addr[0], self.addr[1], self.datapath.id, self.port_state))
 
     def __str__(self):
         msg = ("netNode<{0}\nLink={1}, LeafPorts={2}>"
                .format(str(self.__repr__()), self.links, str(self.leaf_ports())))
         return msg
+
+    @property
+    def is_ond_enabled(self):
+        return self.config["EnableOnDemandTunnels"]
 
     def leaf_ports(self):
         return self._leaf_prts
@@ -129,20 +136,19 @@ class netNode():
         if not self.node_id:
             self.update_node_id()
         self.logger.info("==Updating node %s==", self.node_id)
-        self.update_switch()
         self.update_ipop_topology(tapn)
         self.update_links()
         self.update_leaf_ports()
 
-    def update_switch(self):
-        self.switch = None
-        sw = get_switch(self.ryu, self.datapath.id)
-        if sw:
-            self.switch = sw[0]
-        self.logger.info("+ Updated switch %s", self.switch)
+    def update_switch_ports(self):
+        self.logger.info("DPSet.port_state %s", self.ryu.dpset.port_state)
+        self.port_state = copy.deepcopy(self.ryu.dpset.port_state.get(
+            self.datapath.id, dpset.PortState()))
 
     def update_ipop_topology(self, tapn=None):
         olid = self.config["OverlayId"]
+        if not olid:
+            raise ValueError("No overlay ID specified")
         req = dict(Request=dict(Action="GetTunnels", Params={"OverlayId": olid}))
         resp = self._send_recv(self.addr, req)
         if resp and resp["Response"]["Status"]:
@@ -174,31 +180,29 @@ class netNode():
             self.logger.warning("- Failed to update topo for node:%s dpid:%s, response:%s",
                                 self.node_id, self.datapath.id, msg)
 
-
-
     def update_links(self):
         self.links.clear()
-        for prt in self.switch.ports:
+        for prt in self.port_state.values():
             peer = self.mac_local_to_peer.get(prt.hw_addr, None)
             if peer:
                 self.links[prt.port_no] = (prt.hw_addr, peer[0], peer[1])
         self.logger.info("+ Updated links %s", self.links)
 
     def update_leaf_ports(self):
-        self._leaf_prts = set(pt.port_no for pt in self.switch.ports \
-            if pt.port_no not in self.links)
+        self._leaf_prts = set(pno for pno in self.port_state if pno not in self.links)
         self.logger.info("+ Updated leaf ports: %s", str(self._leaf_prts))
+
+    def add_port(self, ofpport):
+        self.port_state[ofpport.port_no] = ofpport
 
     def delete_port(self, ofpport):
         port_no = ofpport.port_no
-        #prt = switches.Port(self.datapath.id, self.datapath.ofproto, ofpport)
-        #self.switch.ports.remove(prt)
         try:
-            self.switch.del_port(ofpport)
+            self.port_state.pop(port_no)
         except ValueError as err:
             # RYU events are delivered inconsistently when using both the newer topo with the older
             # events. Ex. legacy:DEL port, DEL port ADD Port, topo: DEL port, ADD port, DEL port
-            self.logger.warning("Port %s already removed. ValueError=%s", ofpport, str(err))
+            self.logger.warning("Port %s not found for removal!!. ValueError=%s", ofpport, str(err))
         td = self.links.get(port_no)
         if td:
             self.mac_local_to_peer.pop(td[0], None)
@@ -218,7 +222,7 @@ class netNode():
         olid = self.config["OverlayId"]
         req = dict(Request=dict(Action="TunnelRquest", Params=dict(OverlayId=olid,
                                                                    PeerId=peer_id,
-                                                                   Operation="Remove")))
+                                                                   Operation="REMOVE")))
         resp = self._send_recv(self.addr, req)
         self.logger.info("REMOVE OnDemand tunnel Response={}".format(resp))
 
@@ -411,6 +415,9 @@ class LearningTable():
 ###################################################################################################
 class BoundedFlood(app_manager.RyuApp):
     OFP_VERSIONS = [ofproto_v1_4.OFP_VERSION]
+    _CONTEXTS = {
+        'dpset': dpset.DPSet,
+    }
     OFCTL = spawn.find_executable("ovs-ofctl")
     def __init__(self, *args, **kwargs):
         super(BoundedFlood, self).__init__(*args, **kwargs)
@@ -425,6 +432,7 @@ class BoundedFlood(app_manager.RyuApp):
         self.monitor_interval = self.config["MonitorInterval"]
         self._lock = threading.Lock()
         self._setup_logger()
+        self.dpset = kwargs['dpset']
 
     def _setup_logger(self):
         fqname = self.config["LogFilename"]
@@ -473,17 +481,13 @@ class BoundedFlood(app_manager.RyuApp):
         self.add_flow_drop_multicast(datapath)
         self.lt.dpid = datapath.id
 
-    @set_ev_cls(event.EventSwitchEnter)
-    def handler_switch_enter(self, ev):
-        node = self.nodes.get(ev.switch.dp.id, None)
+        node = self.nodes.get(datapath.id, None)
         if not node:
-            node = netNode(ev.switch.dp, self)
-        node.switch = ev.switch
-        self.nodes[ev.switch.dp.id] = node
-        if ev.switch.ports:
-            node.update_ipop_topology()
-            node.update_links()
-            node.update_leaf_ports()
+            node = netNode(datapath, self)
+        self.nodes[datapath.id] = node
+        node.update_switch_ports()
+        if node.port_state:
+            node.update()
         self.lt.node_id = node.node_id
 
     @set_ev_cls(event.EventSwitchLeave, [MAIN_DISPATCHER, CONFIG_DISPATCHER, DEAD_DISPATCHER])
@@ -503,6 +507,7 @@ class BoundedFlood(app_manager.RyuApp):
         with self._lock:
             if msg.reason == ofp.OFPPR_ADD:
                 self.logger.info("OFPPortStatus: port ADDED desc=%s", msg.desc)
+                self.net_node_add_port(dp, msg.desc)
                 self.update_net_node(dp, msg.desc.name.decode("utf-8"))
                 self.lt.leaf_ports = node.leaf_ports()
                 self.lt.register_peer_switch(node.peer_id(port_no), port_no)
@@ -563,8 +568,8 @@ class BoundedFlood(app_manager.RyuApp):
 
     @set_ev_cls(ofp_event.EventOFPFlowStatsReply, MAIN_DISPATCHER) # pylint: disable=no-member
     def _flow_stats_reply_handler(self, ev):
-        #self.nodes[ev.msg.datapath.id].ond_tunnel(ev.msg.body, self.lt)
-        pass
+        if self.nodes[ev.msg.datapath.id].is_ond_enabled:
+            self.nodes[ev.msg.datapath.id].ond_tunnel(ev.msg.body, self.lt)
     ###################################################################################
     def _monitor(self):
         while True:
@@ -595,7 +600,7 @@ class BoundedFlood(app_manager.RyuApp):
                            self.nodes[dpid].counters.get("TotalHopCount", 0),
                            self.nodes[dpid].counters.get("AvgFloodingHopCount", 0))
             if msg:
-                self.logger.info("@@>\n" + msg + "\n<@@")
+                self.logger.info("@@>\n%s\n<@@", msg)
             hub.sleep(self.monitor_interval)
 
     def request_stats(self, datapath, tblid=0):
@@ -698,6 +703,11 @@ class BoundedFlood(app_manager.RyuApp):
         node.update(tap_name)
         self.nodes[dpid] = node
         return node
+
+    def net_node_add_port(self, datapath, ofpport):
+        dpid = datapath.id
+        node = self.nodes[dpid]
+        node.add_port(ofpport)
 
     def net_node_del_port(self, datapath, ofpport):
         dpid = datapath.id
@@ -967,7 +977,8 @@ class FloodingBounds():
 class TrafficAnalyzer():
     """ A very simple traffic analyzer to trigger an on demand tunnel """
     _DEMAND_THRESHOLD = 1<<23 # 80MB
-    def __init__(self, logger, demand_threshold=None):
+    def __init__(self, logger, demand_threshold=None, max_ond_tuns=1):
+        self.max_ond = max_ond_tuns
         if demand_threshold:
             if demand_threshold[-1] == "K":
                 val = int(demand_threshold[:-1]) * 1<<10
@@ -984,19 +995,38 @@ class TrafficAnalyzer():
 
     def ond_recc(self, flow_metrics, learning_table):
         tunnel_reqs = []
+        #self.logger.info("FLOW METRICS:%s", flow_metrics)
+        active_flows = set()
         for stat in flow_metrics:
-            if "eth_src" not in stat.match:
+            if "eth_src" not in stat.match or "eth_dst" not in stat.match:
                 continue
             src_mac = stat.match["eth_src"]
+            dst_mac = stat.match["eth_dst"]
             psw = learning_table.leaf_to_peersw(src_mac)
             if not psw:
                 continue
-            assert bool(psw.rnid)
-            if stat.byte_count > self.demand_threshold and psw.rnid not in self.ond:
+            #assert bool(psw.rnid)
+            if dst_mac not in learning_table.local_leaf_macs:
+                # only the leaf's managing sw should create an OND tunnel
+                # so prevent every switch along path from req an OND to the initiator
+                continue
+            if psw.port_no is not None:
+                # already a direct tunnel to this switch
+                continue
+            if psw.rnid in self.ond:
+                active_flows.add(psw.rnid)
+            elif len(self.ond) < self.max_ond and stat.byte_count > self.demand_threshold:
                 self.logger.info("Requesting On-Demand edge to %s", psw.rnid)
                 tunnel_reqs.append((psw.rnid, "ADD"))
                 self.ond.add(psw.rnid)
-            #elif stat.byte_count < self.demand_threshold and psw.rnid in self.ond:
-            #    tunnel_reqs.append((psw.rnid, "REMOVE"))
-            #    self.ond.discard(psw.rnid)
+                active_flows.add(psw.rnid)
+        # if the flow has expired request the on demand tunnel be removed
+        remove = []
+        for rnid in self.ond:
+            if rnid not in active_flows:
+                self.logger.info("Requesting removal of OND edge to %s", rnid)
+                tunnel_reqs.append((rnid, "REMOVE"))
+                remove.append(rnid)
+        for rnid in remove:
+            self.ond.discard(rnid)
         return tunnel_reqs
