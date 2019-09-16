@@ -402,7 +402,6 @@ class Topology(ControllerModule, CFX):
             enf_lnks = ovl_cfg.get("EnforcedEdges", [])
             peer_list = [peer_id for peer_id in net_ovl["KnownPeers"] \
                 if net_ovl["KnownPeers"][peer_id].is_available]
-            #peer_list = [*net_ovl["KnownPeers"].keys()]
             if not peer_list:
                 return
             self.register_cbt("Logger", "LOG_DEBUG", "Peerlist for Netbuilder {0}"
@@ -427,7 +426,7 @@ class Topology(ControllerModule, CFX):
                 # perform relink op for LDL
                 net_ovl["RelinkCount"] = len(peer_list) if peer_list else 1
                 is_relink = True
-                self.log("LOG_INFO", "RELINKing!")
+                self.log("LOG_INFO", "RELINKing condition met but currently ignored!")
             adjl = gb.build_adj_list(peer_list, curr_adjl, net_ovl["OndPeers"], relink=False)
             nb.refresh(adjl)
         else:

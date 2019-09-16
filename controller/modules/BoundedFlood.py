@@ -47,8 +47,6 @@ from ryu.lib import hub
 from ryu.lib import mac as mac_lib
 from ryu.topology import event
 
-# The differences among the ordering of observed events (in particular port del/del/add vs
-# del/add/del) coming from RYU continue to be problematic when system is under frequent updates.
 CONFIG = {
     "OverlayId": "",
     "BridgeName": "",
@@ -644,7 +642,6 @@ class BoundedFlood(app_manager.RyuApp):
             self.logger.warning("Add flow (MC) operation failed, OFPFlowMod=%s", mod)
 
     def del_flows_port(self, datapath, port_no, tblid=None):
-        self.logger.debug("Deleting all flows on egress %s", port_no)
         # this is silently failing, no flows are deleted
         #ofproto = datapath.ofproto
         #if tblid is None:
@@ -670,12 +667,10 @@ class BoundedFlood(app_manager.RyuApp):
         #                        port_no, mod)
         resp = runcmd([BoundedFlood.OFCTL, "del-flows", self.config["BridgeName"],
                        "in_port={0}".format(port_no)])
-        self.logger.warning("::Used OVS del-flow in_port=%s", port_no)
+        self.logger.debug("Deleted flows with in_port=%s", port_no)
         resp = runcmd([BoundedFlood.OFCTL, "del-flows", self.config["BridgeName"],
                        "out_port={0}".format(port_no)])
-        self.logger.warning("::Used OVS del-flow out_port=%s", port_no)
-
-        #self.logger.warning(resp.stdout.decode("utf-8") + "::" + resp.stderr.decode("utf-8"))
+        self.logger.debug("deleted flows with out_port=%s", port_no)
 
     def update_flow_match_dstmac(self, datapath, dst_mac, new_egress, tblid=None):
         self.logger.debug("Updating all flows matching dst mac %s", dst_mac)
@@ -821,6 +816,7 @@ class BoundedFlood(app_manager.RyuApp):
 
     def update_leaf_macs_and_flows(self, datapath, rnid, macs, num_items, ingress):
         self.lt.peersw_tbl[rnid].leaf_macs.clear()
+        self.lt.peersw_tbl[rnid].hop_count = 1
         mlen = num_items*6
         for mactup in struct.iter_unpack("!6s", macs[:mlen]):
             macstr = mac_lib.haddr_to_str(mactup[0])
