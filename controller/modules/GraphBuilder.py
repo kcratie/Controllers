@@ -48,7 +48,7 @@ class GraphBuilder():
         self._relink = False
         if self._manual_topo and not self._enforced_edges:
             self._top.log("LOG_WARNING", "Ad hoc topology specified but no peers are"
-                          "provided, config=%s", cfg)
+                          "provided, config=%s", str(cfg))
 
     def _build_enforced(self, adj_list):
         for peer_id in self._enforced_edges:
@@ -158,6 +158,7 @@ class GraphBuilder():
                     ce = ConnectionEdge(peer_id, edge_type="CETypeOnDemand")
                     ond[peer_id] = ce
             elif op == "REMOVE":
+                self._top.log("LOG_DEBUG", "Processing OND Removal, popping %s", peer_id)
                 ond.pop(peer_id, None)
                 if peer_id not in adj_list:
                     # only clear the task after the tunnel has been removed by NetworkBuilder

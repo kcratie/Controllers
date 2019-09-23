@@ -396,7 +396,8 @@ class LinkManager(ControllerModule):
         tap_name = self.config["Overlays"][overlay_id]["TapName"][:8] + str(peer_id[:7])
         if os.name == "nt":
             tap_name = self.config["Overlays"][overlay_id]["TapName"]
-        self.log("LOG_DEBUG", "IgnoredNetInterfaces: %s", self._get_ignored_tap_names(overlay_id, tap_name))
+        self.log("LOG_DEBUG", "IgnoredNetInterfaces: %s",
+                 self._get_ignored_tap_names(overlay_id, tap_name))
         create_tnl_params = {
             "OverlayId": overlay_id,
             "NodeId": self.node_id,
@@ -612,14 +613,14 @@ class LinkManager(ControllerModule):
             msg = str("The requested lnk endpt was not authorized it will not be created. "
                       "TunnelId={0}, PeerId={1}".format(tnlid, peer_id))
             self.register_cbt("Logger", "LOG_WARNING", msg)
-            lnk_endpt_cbt.set_response("msg", False)
+            lnk_endpt_cbt.set_response(msg, False)
             self.complete_cbt(lnk_endpt_cbt)
             return
         if self._tunnels[tnlid].link:
             msg = str("A link already exist for this tunnel, it will not be created. "
                       "TunnelId={0}, PeerId={1}".format(tnlid, peer_id))
             self.register_cbt("Logger", "LOG_WARNING", msg)
-            lnk_endpt_cbt.set_response("msg", False)
+            lnk_endpt_cbt.set_response(msg, False)
             self.complete_cbt(lnk_endpt_cbt)
             return
         lnkid = tnlid
@@ -634,7 +635,8 @@ class LinkManager(ControllerModule):
         # Send request to Tincan
         ol_type = self.config["Overlays"][olid]["Type"]
         tap_name = self.config["Overlays"][olid]["TapName"][:8] + str(peer_id[:7])
-        self.log("LOG_DEBUG", "IgnoredNetInterfaces: %s", self._get_ignored_tap_names(olid, tap_name))
+        self.log("LOG_DEBUG", "IgnoredNetInterfaces: %s",
+                 self._get_ignored_tap_names(olid, tap_name))
         create_link_params = {
             "OverlayId": olid,
             # overlay params

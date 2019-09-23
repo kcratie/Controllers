@@ -428,6 +428,7 @@ class BoundedFlood(app_manager.RyuApp):
         self.load_config()
         self.idle_timeout = self.config["FlowIdleTimeout"]
         self.monitor_interval = self.config["MonitorInterval"]
+        self._last_log_time = time.time()
         self._lock = threading.Lock()
         self._setup_logger()
         self.dpset = kwargs['dpset']
@@ -572,6 +573,7 @@ class BoundedFlood(app_manager.RyuApp):
     def _monitor(self):
         while True:
             msg = ""
+            state_msg = ""
             for dpid in self.nodes:
                 self.nodes[dpid].counters["MaxFloodingHopCount"] = 0
                 total_hc = 0
@@ -589,16 +591,21 @@ class BoundedFlood(app_manager.RyuApp):
                 self.nodes[dpid].counters["AvgFloodingHopCount"] = total_hc/num_rsw
 
                 self.request_stats(self.nodes[dpid].datapath)
-                msg += "{0}\n".format(self.nodes[dpid])
-                msg += "{0}\n".format(str(self.lt))
-                msg += "Max Flooding Hop Count {0}\n".\
+                if self.logger.isEnabledFor(logging.DEBUG):
+                    state_msg += "{0}\n".format(self.nodes[dpid])
+                    state_msg += "{0}\n".format(str(self.lt))
+                msg += "Max_FHC={0},".\
                     format(self.nodes[dpid].counters.get("MaxFloodingHopCount", 1))
-                msg += "NPC={0}, THC={1}, AHC={2}".\
+                msg += "NPC={0},THC={1},AHC={2}".\
                     format(self.nodes[dpid].counters.get("NumPeersCounted", 0),
                            self.nodes[dpid].counters.get("TotalHopCount", 0),
                            self.nodes[dpid].counters.get("AvgFloodingHopCount", 0))
-            if msg:
-                self.logger.info("@@>\n%s\n<@@", msg)
+            if time.time() - self._last_log_time > 60:
+                self._last_log_time = time.time()
+                if msg:
+                    self.logger.info("@@>\n%s\n<@@", msg)
+                if state_msg:
+                    self.logger.debug("%s", state_msg)
             hub.sleep(self.monitor_interval)
 
     def request_stats(self, datapath, tblid=0):
@@ -985,7 +992,7 @@ class TrafficAnalyzer():
             self.demand_threshold = val
         else:
             self.demand_threshold = TrafficAnalyzer._DEMAND_THRESHOLD
-        self.ond = set()
+        self.ond = dict()
         self.logger = logger
         logger.info("Demand threshold set at %d bytes", self.demand_threshold)
 
@@ -1002,6 +1009,7 @@ class TrafficAnalyzer():
             if not psw:
                 continue
             #assert bool(psw.rnid)
+            active_flows.add(psw.rnid)
             if dst_mac not in learning_table.local_leaf_macs:
                 # only the leaf's managing sw should create an OND tunnel
                 # so prevent every switch along path from req an OND to the initiator
@@ -1009,20 +1017,19 @@ class TrafficAnalyzer():
             if psw.port_no is not None:
                 # already a direct tunnel to this switch
                 continue
-            if psw.rnid in self.ond:
-                active_flows.add(psw.rnid)
-            elif len(self.ond) < self.max_ond and stat.byte_count > self.demand_threshold:
+            if psw.rnid not in self.ond and len(self.ond) < self.max_ond and \
+                stat.byte_count > self.demand_threshold:
                 self.logger.info("Requesting On-Demand edge to %s", psw.rnid)
                 tunnel_reqs.append((psw.rnid, "ADD"))
-                self.ond.add(psw.rnid)
+                self.ond[psw.rnid] = time.time()
                 active_flows.add(psw.rnid)
         # if the flow has expired request the on demand tunnel be removed
-        remove = []
+        remove_list = []
         for rnid in self.ond:
-            if rnid not in active_flows:
+            if rnid not in active_flows and (time.time() - self.ond[rnid]) >= 60:
                 self.logger.info("Requesting removal of OND edge to %s", rnid)
                 tunnel_reqs.append((rnid, "REMOVE"))
-                remove.append(rnid)
-        for rnid in remove:
-            self.ond.discard(rnid)
+                remove_list.append(rnid)
+        for rnid in remove_list:
+            del self.ond[rnid]
         return tunnel_reqs
