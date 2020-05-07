@@ -72,7 +72,7 @@ CONFIG = {
     "MonitorInterval": 60,
     "EnableOnDemandTunnels": False,
     "MaxOnDemandEdges": 1
-    }
+}
 
 def runcmd(cmd):
     """ Run a shell command. if fails, raise an exception. """
@@ -165,7 +165,7 @@ class container:
 
     def cleanup(self, key):
         self.store[key].expire()
-        if self.store[key]:
+        if len(self.store[key])==0:
             self.store.pop(key)
 
     def expire(self):
@@ -389,7 +389,7 @@ class PeerSwitch():
         self.hop_count = 0
 
     def __repr__(self):
-        return "PeerSwitch<rnid={0}, port_no={1}, hop_count={2}, leaf_macs={3}>".\
+        return "PeerSwitch<rnid={0}, port_no={1}, hop_count={2}, leaf_macs={3}>". \
             format(self.rnid[:7], self.port_no, self.hop_count, self.leaf_macs)
 
 class LearningTable():
@@ -410,8 +410,8 @@ class LearningTable():
 
     def __repr__(self):
         state = "dpid={0}, nid={1}, ingress_tbl={2}, leaf_ports={3}, peersw_tbl={4}, " \
-            "rootsw_tbl={5}".format(self._dpid, self._nid, self.ingress_tbl, self.leaf_ports,
-                                    self.peersw_tbl, self.rootsw_tbl)
+                "rootsw_tbl={5}".format(self._dpid, self._nid, self.ingress_tbl, self.leaf_ports,
+                                        self.peersw_tbl, self.rootsw_tbl)
         return state
 
     def __str__(self):
@@ -671,7 +671,7 @@ class BoundedFlood(app_manager.RyuApp):
         req_ip = pkt.get_protocol(ipv4.ipv4)
         is_igmp = False
         is_dvmrp = False
-        
+
         if req_ip and req_ip.proto == 200:
             is_dvmrp = True
         if req_igmp:
@@ -706,7 +706,7 @@ class BoundedFlood(app_manager.RyuApp):
                                     actions.append(parser.OFPActionOutput(outport))
                                 for outport in netnode.leaf_interest.get(record.address):
                                     actions.append(parser.OFPActionOutput(outport))
-                                    
+
                                 if in_port in netnode.leaf_ports():
                                     self.hard_timeout = self.mcast_broadcast_period
 
@@ -839,7 +839,7 @@ class BoundedFlood(app_manager.RyuApp):
                         prev_forced_broadcast = netnode.broadcast_timeout[(ip_src, ip_dst)]
                     else:
                         prev_forced_broadcast = None
-                        
+
                     if prev_forced_broadcast is None or \
                             curr_time - prev_forced_broadcast > self.mcast_broadcast_period:
                         self.logger.info("Broadcast timeout for %s, will broadcast",
@@ -914,9 +914,9 @@ class BoundedFlood(app_manager.RyuApp):
                 if self.logger.isEnabledFor(logging.DEBUG):
                     state_msg += "{0}\n".format(self.nodes[dpid])
                     state_msg += "{0}\n".format(str(self.lt))
-                msg += "Max_FHC={0},".\
+                msg += "Max_FHC={0},". \
                     format(self.nodes[dpid].counters.get("MaxFloodingHopCount", 1))
-                msg += "NPC={0},THC={1},AHC={2}".\
+                msg += "NPC={0},THC={1},AHC={2}". \
                     format(self.nodes[dpid].counters.get("NumPeersCounted", 0),
                            self.nodes[dpid].counters.get("TotalHopCount", 0),
                            self.nodes[dpid].counters.get("AvgFloodingHopCount", 0))
@@ -1296,16 +1296,16 @@ class FloodingBounds():
         myi = node_list.index(my_nid)
         num_nodes = len(node_list)
         for i, peer1 in enumerate(node_list):
-        # Preconditions:
-        #  peer1 < peer2
-        #  self < peer1 < peer2 || peer1 < peer2 <= self
+            # Preconditions:
+            #  peer1 < peer2
+            #  self < peer1 < peer2 || peer1 < peer2 <= self
             if i == myi:
                 continue
             p2i = (i + 1) % num_nodes
             peer2 = node_list[p2i]
-            assert (my_nid < peer1 or peer2 <= my_nid),\
-                "invalid nid ordering self={0}, peer1={1}, peer2={2}".\
-                format(my_nid, peer1, peer2)
+            assert (my_nid < peer1 or peer2 <= my_nid), \
+                "invalid nid ordering self={0}, peer1={1}, peer2={2}". \
+                    format(my_nid, peer1, peer2)
             # base scenario when the local node is initiating the FRB
             hops = 1
             root_nid = my_nid
@@ -1318,9 +1318,9 @@ class FloodingBounds():
                     if prtno and prtno not in exclude_ports:
                         out_bounds.append((prtno, frb_hdr))
             else:
-                assert prev_frb.bound_nid != my_nid,\
-                    "this frb should not have reached this node ny_nid={0} prev_frb={1}".\
-                    format(my_nid, prev_frb)
+                assert prev_frb.bound_nid != my_nid, \
+                    "this frb should not have reached this node ny_nid={0} prev_frb={1}". \
+                        format(my_nid, prev_frb)
                 hops = prev_frb.hop_count + 1
                 root_nid = prev_frb.root_nid
                 if peer1 < my_nid: # peer1 is a predecessor
@@ -1336,7 +1336,7 @@ class FloodingBounds():
                         if peer2 < my_nid and peer2 > prev_frb.bound_nid:
                             bound_nid = prev_frb.bound_nid
                         elif (peer2 < my_nid and peer2 <= prev_frb.bound_nid) or \
-                            peer2 > my_nid:
+                                peer2 > my_nid:
                             bound_nid = peer2
                     else: # prev_frb.bound_nid > my_nid
                         if prev_frb.bound_nid <= peer1:
@@ -1395,7 +1395,7 @@ class TrafficAnalyzer():
                 # already a direct tunnel to this switch
                 continue
             if psw.rnid not in self.ond and len(self.ond) < self.max_ond and \
-                stat.byte_count > self.demand_threshold:
+                    stat.byte_count > self.demand_threshold:
                 self.logger.info("Requesting On-Demand edge to %s", psw.rnid)
                 tunnel_reqs.append((psw.rnid, "ADD"))
                 self.ond[psw.rnid] = time.time()
