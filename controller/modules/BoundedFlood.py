@@ -963,7 +963,7 @@ class BoundedFlood(app_manager.RyuApp):
             mod = parser.OFPFlowMod(datapath=datapath, priority=priority, table_id=tblid,
                                     idle_timeout=idle, hard_timeout=hard_timeout ,match=match, instructions=inst)
             resp = datapath.send_msg(mod)
-            self.logger.info("response received from add flow request is {}".format(resp))
+            self.logger.info("Response received from add flow request is {}".format(resp))
             if not resp:
                 self.logger.info("Add flow operation failed, OFPFlowMod=%s", mod)
         except struct.error as err:
@@ -1180,7 +1180,7 @@ class BoundedFlood(app_manager.RyuApp):
                                                   in_port=in_port, actions=actions, data=data)
                         datapath.send_msg(out)
                         # send out a graft message upstream (because leaf is interested.)
-                        self.logger.info("sending a graft message upstream for src {} dst {}".format(pload_ip.src,
+                        self.logger.info("Sending a graft message upstream for src {} dst {}".format(pload_ip.src,
                                                                                                 pload_ip.dst))
                         graft_msg = self.frame_graft_msg(pload_ip.src, pload_ip.dst)
                         actions = [parser.OFPActionOutput(in_port)]
