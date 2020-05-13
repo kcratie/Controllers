@@ -714,6 +714,22 @@ class BoundedFlood(app_manager.RyuApp):
             self.nodes[ev.msg.datapath.id].ond_tunnel(ev.msg.body, self.lt)
     ##################################################################################
 
+    def _send_igmp_query(self, msg):
+        datapath = msg.datapath
+        parser = datapath.ofproto_parser
+        dpid = datapath.id
+        netnode = self.nodes[dpid]
+        actions = []
+        igmp_query = self.frame_igmp_query()
+        for leaf_port in netnode.leaf_ports():
+            actions.append(parser.OFPActionOutput(leaf_port))
+        if len(actions) != 0:
+            out = parser.OFPPacketOut(datapath=datapath, buffer_id=msg.buffer_id,
+                                      in_port=datapath.ofproto.OFPP_LOCAL,
+                                      actions=actions, data=igmp_query.data)
+            self.logger.info("Sending IGMP QUERY {} to leaf ports".format(igmp_query))
+            datapath.send_msg(out)
+
     def _handle_igmp(self, msg):
         datapath = msg.datapath
         parser = datapath.ofproto_parser
@@ -732,13 +748,13 @@ class BoundedFlood(app_manager.RyuApp):
             for record in req_igmp.records:
                 if record.type_ == 3:
                     if in_port in netnode.leaf_ports():
-                        self.logger.info(" Leaving multicast group {}".format(record.address))
+                        self.logger.info("Leaving multicast group {}".format(record.address))
                         if netnode.leaf_interest.containsKey(record.address):
                             if netnode.leaf_interest.containsValue(record.address, in_port):
                                 netnode.leaf_interest.removeValue(record.address, in_port)
-                elif record.type_ == 4:
+                elif record.type_ == 4 or record.type_ == 2:
                     if in_port in netnode.leaf_ports():
-                        self.logger.info("Joining multicast group {}".format(record.address))
+                        self.logger.info("Joining/Reaffirming multicast group {}".format(record.address))
                         netnode.leaf_interest.put(record.address, in_port)
                     # Optimization: if need to update flows, find all transmissions corresponding this group
                     # address and update rules for them.
@@ -747,10 +763,12 @@ class BoundedFlood(app_manager.RyuApp):
                         for transmission in netnode.multicast_groups.get(record.address):
                             self.logger.info("Updating flow for {} on new IGMP join.".format(transmission))
                             actions = []
-                            for outport in netnode.downstream_interest.get(transmission):
-                                actions.append(parser.OFPActionOutput(outport))
-                            for outport in netnode.leaf_interest.get(record.address):
-                                actions.append(parser.OFPActionOutput(outport))
+                            if netnode.downstream_interest.containsKey(transmission):
+                                for outport in netnode.downstream_interest.get(transmission):
+                                    actions.append(parser.OFPActionOutput(outport))
+                            if netnode.leaf_interest.containsKey(record.address):
+                                for outport in netnode.leaf_interest.get(record.address):
+                                    actions.append(parser.OFPActionOutput(outport))
                             if in_port in netnode.leaf_ports():
                                 self.hard_timeout = self.mcast_broadcast_period
                             ip_src, ip_dst = transmission
@@ -1126,21 +1144,45 @@ class BoundedFlood(app_manager.RyuApp):
             self.logger.warning("FRB leaf exchange failed, OFPPacketOut=%s", pkt_out)
 
     def frame_graft_msg(self,source_address, group_address):
-        dvmrp = DVMRP(src_address=source_address, grp_address=group_address)
+        dvmrp = DVMRP(src_address=source_address,
+                      grp_address=group_address)
         # src and dst MAC addresses do not matter.
-        eth = ethernet.ethernet(dst='01:00:5E:0A:0A:0A', src='00:00:00:00:00:00', ethertype=ether.ETH_TYPE_IP)
+        eth = ethernet.ethernet(dst='01:00:5E:0A:0A:0A',
+                                src='00:00:00:00:00:00',
+                                ethertype=ether.ETH_TYPE_IP)
         pkt = packet.Packet()
         total_length = 20 + dvmrp.min_len
         nw_proto = 200 # custom network protocol payload type
         nw_dst = '255.255.255.255'
         nw_src = '0.0.0.0'
-        i = ipv4.ipv4(total_length=total_length, src=nw_src, dst=nw_dst,
+        i = ipv4.ipv4(total_length=total_length,
+                      src=nw_src,
+                      dst=nw_dst,
                       proto=nw_proto)
         pkt.add_protocol(eth)
         pkt.add_protocol(i)
         pkt.add_protocol(dvmrp)
         pkt.serialize()
         return pkt
+
+    def frame_igmp_query(self):
+        igmp_query = igmp.igmpv3_query(maxresp=igmp.QUERY_RESPONSE_INTERVAL * 10,
+                          csum=0,
+                          address='0.0.0.0')
+        eth = ethernet.ethernet(dst=igmp.MULTICAST_MAC_ALL_HOST,
+                                src='00:00:00:00:00:00',
+                                ethertype=ether.ETH_TYPE_IP)
+        ip = ipv4.ipv4(total_length=len(ipv4.ipv4()) + len(igmp_query),
+                       proto=inet.IPPROTO_IGMP, ttl=1,
+                       src='0.0.0.0',
+                       dst=igmp.MULTICAST_IP_ALL_HOST)
+        pkt = packet.Packet()
+        pkt.add_protocol(eth)
+        pkt.add_protocol(ip)
+        pkt.add_protocol(igmp_query)
+        pkt.serialize()
+        return pkt
+
 
     def handle_bounded_flood_msg(self, datapath, pkt, in_port, msg):
         eth = pkt.protocols[0]
@@ -1169,6 +1211,8 @@ class BoundedFlood(app_manager.RyuApp):
             is_multicast = True
             netnode.upstream_reception.put((pload_ip.src, pload_ip.dst), in_port)
             netnode.multicast_groups.put(pload_ip.dst, (pload_ip.src, pload_ip.dst))
+            # good time to send igmp queries to leaf ports
+            self._send_igmp_query(msg)
             # check if any leaf nodes are interested and in_port is not the same as interested port.
             if netnode.leaf_interest.containsKey(pload_ip.dst):
                 for outport in netnode.leaf_interest.get(pload_ip.dst):
