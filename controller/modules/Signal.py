@@ -22,6 +22,7 @@
 import ssl
 import time
 import threading
+import os
 from queue import Queue
 try:
     import simplejson as json
@@ -117,8 +118,8 @@ class XmppTransport(sleekxmpp.ClientXMPP):
             # In case server is trusted and its self signed certificate is acceptable.
             if transport.ca_certs=="":
                 transport.ca_certs = None
-            transport.certfile = overlay_descr["CertDirectory"] + overlay_descr["CertFile"]
-            transport.keyfile = overlay_descr["CertDirectory"] + overlay_descr["Keyfile"]
+            transport.certfile = os.path.join(overlay_descr["CertDirectory"], overlay_descr["CertFile"])
+            transport.keyfile = os.path.join(overlay_descr["CertDirectory"], overlay_descr["KeyFile"])
             transport._enable_ssl = True
         elif auth_method == "PASSWORD":
             if user is None:
@@ -494,4 +495,3 @@ class Signal(ControllerModule):
                     if pending_cbt:
                         pending_cbt.set_response("The specified recipient was not found", False)
                         self.complete_cbt(pending_cbt)
-
