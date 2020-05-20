@@ -28,22 +28,21 @@ import socket
 import threading
 import struct
 import uuid
+from distutils import spawn
 import os
 import subprocess
 import logging
-import logging.handlers as lh
+from collections.abc import MutableSet
 import random
 import time
 import math
-from distutils import spawn
-from collections.abc import MutableSet
-
+import logging.handlers as lh
 from ryu.base import app_manager
 from ryu.controller import ofp_event
 from ryu.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER, DEAD_DISPATCHER
 from ryu.controller.handler import set_ev_cls
 from ryu.controller import dpset
-from ryu.ofproto import ofproto_v1_4, ether
+from ryu.ofproto import ofproto_v1_4, inet, ether
 from ryu.lib.packet import packet_base
 from ryu.lib.packet import packet
 from ryu.lib.packet import ethernet
@@ -72,6 +71,7 @@ CONFIG = {
     "MaxOnDemandEdges": 1
     }
 
+
 def runcmd(cmd):
     """ Run a shell command. if fails, raise an exception. """
     if cmd[0] is None:
@@ -79,9 +79,9 @@ def runcmd(cmd):
     p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
     return p
 
-###################################################################################################
-#                       Custom datastores supporting expiration of stale entries                  #
-###################################################################################################
+##########################################################################
+#     Custom datastores supporting expiration of stale entries           #
+##########################################################################
 class timedSet(MutableSet):
     def __init__(self, **kwargs):
         self.store = set()
@@ -133,10 +133,10 @@ class container:
         self.lastCleanup = None
 
     def containsKey(self, key):
-        if (self.lastCleanup is not None and time.time() - self.lastCleanup >= self.ttl):
+        if self.lastCleanup is not None and time.time() - self.lastCleanup >= self.ttl:
             self.lastCleanup = time.time()
             self.expire()
-        return key in self.store and len(self.store[key]) > 0
+        return key in self.store and len(self.store[key])>0
 
     def put(self, key, value):
         if self.lastCleanup is None:
@@ -160,21 +160,20 @@ class container:
         else:
             return None
 
-
     def cleanup(self, key):
         self.store[key].expire()
-        if self.store[key]:
+        if len(self.store[key]) == 0:
             self.store.pop(key)
 
     def expire(self):
-        sampleCount = math.ceil(.25 * self.store.__len__())
+        sampleCount = math.ceil(.25*self.store.__len__())
         clearKeys = random.sample(self.store.keys(), sampleCount)
         for k in clearKeys:
             self.cleanup(k)
 
     def __repr__(self):
         return self.store.__repr__()
-###################################################################################################
+##########################################################################
 
 class netNode():
     def __init__(self, datapath, ryu_app):
@@ -192,10 +191,9 @@ class netNode():
         self.traffic_analyzer = TrafficAnalyzer(self.logger, self.config["DemandThreshold"])
         self.update_node_id()
         # some additional maps for multicast
-        # grp->[ports interested] (for patch switch there is just one leaf port.)
-        self.leaf_interest = container(
-            ttl=24*60*self.config["MulticastBroadcastInterval"]) # 24 hours timeout,
-        # leaf nodes given 24 hours refresh rate by default.
+        # grp->[ports interested]
+        # 24 hours timeout, leaf nodes don't refresh.
+        self.leaf_interest = container(ttl=24*60*self.config["MulticastBroadcastInterval"])
         # (src,grp)-> port on which multicast transmission recvd
         self.upstream_reception = container(ttl=self.config["MulticastBroadcastInterval"]*4)
         # (src,grp)-> [downstream ports from which join for this transmission recvd]
@@ -593,9 +591,8 @@ class BoundedFlood(app_manager.RyuApp):
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
         self.logger.info('OFPSwitchFeatures received: msg.datapath_id=0x%016x n_buffers=%d '
-                         'n_tables=%d auxiliary_id=%d capabilities=0x%08x', msg.datapath_id,
-                         msg.n_buffers, msg.n_tables, msg.auxiliary_id, msg.capabilities)
-
+                          'n_tables=%d auxiliary_id=%d capabilities=0x%08x', msg.datapath_id,
+                          msg.n_buffers, msg.n_tables, msg.auxiliary_id, msg.capabilities)
         # install table-miss flow entry
         match = parser.OFPMatch()
         actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER,
@@ -664,115 +661,17 @@ class BoundedFlood(app_manager.RyuApp):
         dst = eth.dst
         src = eth.src
         dpid = datapath.id
-        netnode = self.nodes[dpid]
         req_igmp = pkt.get_protocol(igmp.igmp)
         req_ip = pkt.get_protocol(ipv4.ipv4)
         is_igmp = False
         is_dvmrp = False
         if req_ip and req_ip.proto == 200:
-            is_dvmrp = True
+            is_dvmrp=True
         if req_igmp:
             is_igmp = True
-            if req_igmp.msgtype == 34:
-                self.logger.info("Received a IGMP_TYPE_REPORT_V3")
-            if req_igmp.msgtype == igmp.IGMP_TYPE_REPORT_V3:
-                if in_port in netnode.leaf_ports():
-                    self.logger.info("Received IGMP_TYPE_REPORT_V3 on LEAF PORT")
-                else:
-                    self.logger.info("Received IGMP_TYPE_REPORT_V3 on PEER PORT")
-                for record in req_igmp.records:
-                    if record.type_ == 3:
-                        if in_port in netnode.leaf_ports():
-                            self.logger.info("Leaving multicast group %s", record.address)
-                            if netnode.leaf_interest.containsKey(record.address):
-                                if netnode.leaf_interest.containsValue(record.address, in_port):
-                                    netnode.leaf_interest.removeValue(record.address, in_port)
-                    elif record.type_ == 4:
-                        if in_port in netnode.leaf_ports():
-                            self.logger.info("Joining multicast group %s", record.address)
-                            netnode.leaf_interest.put(record.address, in_port)
-                        # Optimization: if need to update flows, find all transmissions
-                        # corresponding this group address and update rules for them.
-                        # need to send this IGMP join as DVMRP upstream to create tree.
-                        if netnode.multicast_groups.containsKey(record.address):
-                            for transmission in netnode.multicast_groups.get(record.address):
-                                self.logger.info("Updating flow for %s on new IGMP join",
-                                                 transmission)
-                                actions = []
-                                for outport in netnode.downstream_interest.get(transmission):
-                                    actions.append(parser.OFPActionOutput(outport))
-                                for outport in netnode.leaf_interest.get(record.address):
-                                    actions.append(parser.OFPActionOutput(outport))
-                                if in_port in netnode.leaf_ports():
-                                    self.hard_timeout = self.mcast_broadcast_period
-
-                                match = parser.OFPMatch(eth_type=0x800, ipv4_dst=ip_dst,
-                                                        ipv4_src=ip_src)
-                                self.add_flow(datapath, match, actions, priority=1, tblid=0,
-                                              idle=self.idle_timeout, hard_timeout=self.hard_timeout)
-                                # need to send this IGMP join as DVMRP upstream to create tree.
-                                if netnode.upstream_reception.containsKey(transmission):
-                                    send_port = list(netnode.upstream_reception.get(transmission))[0]
-                                    if send_port not in netnode.leaf_ports():
-                                        # send upstream
-                                        if msg.buffer_id == ofproto.OFP_NO_BUFFER:
-                                            data = msg.data
-                                        ip_src, ip_dst = transmission
-                                        self.logger.info(
-                                            "Sending a graft message upstream on IGMP join for src %s dst %s",
-                                            ip_src, ip_dst)
-                                        graft_msg = self.frame_graft_msg(ip_src, ip_dst)
-                                        actions = [parser.OFPActionOutput(in_port)]
-                                        out = parser.OFPPacketOut(datapath=datapath, buffer_id=msg.buffer_id,
-                                                                  in_port=datapath.ofproto.OFPP_LOCAL,
-                                                                  actions=actions,
-                                                                  data=graft_msg.data)
-                                        datapath.send_msg(out)
-        if is_dvmrp:
-            (req_dvmrp, _, _) = DVMRP.parser(pkt.protocols[2])
-            self.logger.info("Received a downstream DVMRP msg from port %s for %s %s",
-                             in_port, req_dvmrp.src_address, req_dvmrp.grp_address)
-            transmission = (req_dvmrp.src_address, req_dvmrp.grp_address)
-            self.logger.info("Added %s to downstream interest for "
-                             "transmission %s", in_port, transmission)
-            if not netnode.downstream_interest.containsValue(transmission, in_port):
-                netnode.downstream_interest.put(transmission, in_port)
-                # Optimization: Modify flow for multicast as soon as downstream interest table
-                # has changes, note that this optimization takes only updates to non-leaf
-                # downstream ports into account and not leaf ports
-                ip_src, ip_dst = transmission
-                actions = []
-                if netnode.downstream_interest.containsKey(transmission):
-                    self.logger.info("Updating flow for %s on new dvmrp join", transmission)
-                    for outport in netnode.downstream_interest.get(transmission):
-                        actions.append(parser.OFPActionOutput(outport))
-                    if netnode.leaf_interest.containsKey(ip_dst):
-                        for outport in netnode.leaf_interest.get(ip_dst):
-                            actions.append(parser.OFPActionOutput(outport))
-                if in_port in netnode.leaf_ports():
-                    self.hard_timeout = self.mcast_broadcast_period
-
-                match = parser.OFPMatch(eth_type=0x800, ipv4_dst=ip_dst,
-                                        ipv4_src=ip_src)
-                self.add_flow(datapath, match, actions, priority=1, tblid=0,
-                              idle=self.idle_timeout, hard_timeout=self.hard_timeout)
-
-            # need to send this join upstream to create tree, note that this also serves as
-            # reaffirming continued interest in the multicast transmission.
-            if netnode.multicast_groups.containsKey(req_dvmrp.grp_address):
-                for transmission in netnode.multicast_groups.get(req_dvmrp.grp_address):
-                    if netnode.upstream_reception.containsKey(transmission):
-                        send_port = list(netnode.upstream_reception.get(transmission))[0]
-                        if send_port not in netnode.leaf_ports():
-                            # send upstream
-                            if msg.buffer_id == ofproto.OFP_NO_BUFFER:
-                                data = msg.data
-                            actions = [parser.OFPActionOutput(send_port)]
-                            out = parser.OFPPacketOut(datapath=datapath, buffer_id=msg.buffer_id,
-                                                      in_port=in_port, actions=actions, data=data)
-                            datapath.send_msg(out)
-                            self.logger.info("Forwarded DVMRP upstream for %s on port %s",
-                                             (req_dvmrp.src_address, req_dvmrp.grp_address), send_port)
+            self._handle_igmp(msg)
+        elif is_dvmrp:
+            self._handle_dvmrp(msg)
 
         with self._lock:
             if eth.ethertype == 0xc0c0:
@@ -797,78 +696,8 @@ class BoundedFlood(app_manager.RyuApp):
                 self.lt[src] = in_port
                 # check if this is a multicast frame
                 if eth.dst.split(':')[0] == '01':
-                    ip_load = pkt.get_protocol(ipv4.ipv4)
-                    ip_src = ip_load.src
-                    ip_dst = ip_load.dst
-                    if msg.buffer_id == ofproto.OFP_NO_BUFFER:
-                        data = msg.data
-                    self.logger.info("Received a multicast packet with dst %s from %s on port %s",
-                                     dst, src, in_port)
-                    if is_igmp or is_dvmrp:
-                        self.logger.info("Not going to broadcast igmp or dvmrp")
+                    if self._handle_multicast_frame(msg,is_igmp,is_dvmrp):
                         return
-                    elif in_port in netnode.leaf_ports():
-                        # make note only if it comes from leaf port or is broadcast.
-                        netnode.upstream_reception.put((ip_src, ip_dst), in_port)
-                        netnode.multicast_groups.put(ip_dst, (ip_src, ip_dst))
-                        # To force refreshing of state of multicast tree have to revert to periodic broadcasts.
-                        # timestamp is associated with  a multicast flow which is determined by combination of
-                        # IP src and multicast DST address.
-                    # two kind of interested parties in this transmission, leaf nodes, downstream
-                    # nodes. need to maintains actions for each.
-                    actions_leaf = []
-                    actions_downstream = []
-                    # check if any leaf nodes are interested and in_port is not the same as interested port.
-                    if netnode.leaf_interest.containsKey(ip_dst):
-                        for outport in netnode.leaf_interest.get(ip_dst):
-                            if outport != in_port:
-                                actions_leaf.append(parser.OFPActionOutput(outport))
-                    # check if I have any downstream interests, if so append to actions.
-                    if netnode.downstream_interest.containsKey((ip_src, ip_dst)):
-                        self.logger.info("Found downstream for %s", (ip_src, ip_dst))
-                        for outport in netnode.downstream_interest.get((ip_src, ip_dst)):
-                            actions_downstream.append(parser.OFPActionOutput(outport))
-                    # check If it is time to broadcast.
-                    curr_time = time.time()
-                    # Possible that this is first time this multicast is seen outside FRB broadcast'''
-                    if (ip_src, ip_dst) in netnode.broadcast_timeout.keys():
-                        prev_forced_broadcast = netnode.broadcast_timeout[(ip_src, ip_dst)]
-                    else:
-                        prev_forced_broadcast = None
-                    if prev_forced_broadcast is None or \
-                            curr_time - prev_forced_broadcast > self.mcast_broadcast_period:
-                        self.logger.info("Broadcast timeout for %s, will broadcast",
-                                         (ip_src, ip_dst))
-                        netnode.broadcast_timeout[(ip_src, ip_dst)] = time.time()
-                        # still need to send packets to leaf nodes.
-                        actions = actions_leaf
-                        if not actions:
-                            out = parser.OFPPacketOut(datapath=datapath, buffer_id=msg.buffer_id,
-                                                      in_port=in_port, actions=actions, data=data)
-                            self.logger.info("Sending mcast group pkt %s to leaf port %s", ip_dst, outport)
-                            datapath.send_msg(out)
-                    else:
-                        actions = actions_leaf + actions_downstream
-                        # Install a flow rule, if the multicast transmission originates on a leaf node, hard timeout
-                        # has to be set to  a lower value to enable packets to come to controller to initiate periodic
-                        # broadcasts.
-                        if in_port in netnode.leaf_ports():
-                            self.hard_timeout = self.mcast_broadcast_period
-                        if not actions:
-                            match = parser.OFPMatch(eth_type=0x800, ipv4_dst=ip_dst, ipv4_src=ip_src)
-                            self.add_flow(datapath, match, actions, priority=1, tblid=0,
-                                          idle=self.idle_timeout, hard_timeout=self.hard_timeout)
-                            # Also send the packet out this time
-                            out = parser.OFPPacketOut(datapath=datapath, buffer_id=msg.buffer_id,
-                                                      in_port=in_port, actions=actions, data=data)
-                            self.logger.info("sending mcast: dst ip %s egress %s", ip_dst, outport)
-                            datapath.send_msg(out)
-                            return # no need to broadcast
-
-                    # Do not broadcast multicast packets received on non leaf ports on a regular channel.
-                    if in_port not in netnode.leaf_ports():
-                        return
-
                 #perform bounded flood same as leaf case
                 fld = self.flooding_bounds.get(dpid, None)
                 if not fld:
@@ -883,6 +712,218 @@ class BoundedFlood(app_manager.RyuApp):
     def _flow_stats_reply_handler(self, ev):
         if self.nodes[ev.msg.datapath.id].is_ond_enabled:
             self.nodes[ev.msg.datapath.id].ond_tunnel(ev.msg.body, self.lt)
+    ##################################################################################
+
+    def _send_igmp_query(self, msg):
+        datapath = msg.datapath
+        parser = datapath.ofproto_parser
+        dpid = datapath.id
+        netnode = self.nodes[dpid]
+        actions = []
+        igmp_query = self.frame_igmp_query()
+        for leaf_port in netnode.leaf_ports():
+            actions.append(parser.OFPActionOutput(leaf_port))
+        if len(actions) != 0:
+            out = parser.OFPPacketOut(datapath=datapath, buffer_id=msg.buffer_id,
+                                      in_port=datapath.ofproto.OFPP_LOCAL,
+                                      actions=actions, data=igmp_query.data)
+            self.logger.info("Sending IGMP QUERY {} to leaf ports".format(igmp_query))
+            datapath.send_msg(out)
+
+    def _handle_igmp(self, msg):
+        datapath = msg.datapath
+        parser = datapath.ofproto_parser
+        in_port = msg.match['in_port']
+        pkt = packet.Packet(msg.data)
+        req_igmp = pkt.get_protocol(igmp.igmp)
+        dpid = datapath.id
+        netnode = self.nodes[dpid]
+        if req_igmp.msgtype == 34:
+            self.logger.info("Received a IGMP_TYPE_REPORT_V3")
+        if req_igmp.msgtype == igmp.IGMP_TYPE_REPORT_V3:
+            if in_port in netnode.leaf_ports():
+                self.logger.info("Received IGMP_TYPE_REPORT_V3 on LEAF PORT")
+            else:
+                self.logger.info("Received IGMP_TYPE_REPORT_V3 on PEER PORT")
+            for record in req_igmp.records:
+                if record.type_ == 3:
+                    if in_port in netnode.leaf_ports():
+                        self.logger.info("Leaving multicast group {}".format(record.address))
+                        if netnode.leaf_interest.containsKey(record.address):
+                            if netnode.leaf_interest.containsValue(record.address, in_port):
+                                netnode.leaf_interest.removeValue(record.address, in_port)
+                elif record.type_ == 4 or record.type_ == 2:
+                    if in_port in netnode.leaf_ports():
+                        self.logger.info("Joining/Reaffirming multicast group {}".format(record.address))
+                        netnode.leaf_interest.put(record.address, in_port)
+                    # Optimization: if need to update flows, find all transmissions corresponding this group
+                    # address and update rules for them.
+                    # need to send this IGMP join as DVMRP upstream to create tree.
+                    if netnode.multicast_groups.containsKey(record.address):
+                        for transmission in netnode.multicast_groups.get(record.address):
+                            self.logger.info("Updating flow for {} on new IGMP join.".format(transmission))
+                            actions = []
+                            if netnode.downstream_interest.containsKey(transmission):
+                                for outport in netnode.downstream_interest.get(transmission):
+                                    actions.append(parser.OFPActionOutput(outport))
+                            if netnode.leaf_interest.containsKey(record.address):
+                                for outport in netnode.leaf_interest.get(record.address):
+                                    actions.append(parser.OFPActionOutput(outport))
+                            if in_port in netnode.leaf_ports():
+                                self.hard_timeout = self.mcast_broadcast_period
+                            ip_src, ip_dst = transmission
+                            match = parser.OFPMatch(eth_type=0x800, ipv4_dst=ip_dst,
+                                                    ipv4_src=ip_src)
+                            self.add_flow(datapath, match, actions, priority=1, tblid=0,
+                                          idle=self.idle_timeout, hard_timeout=self.hard_timeout)
+                            # need to send this IGMP join as DVMRP upstream to create tree.
+                            if netnode.upstream_reception.containsKey(transmission):
+                                send_port = list(netnode.upstream_reception.get(transmission))[0]
+                                if send_port not in netnode.leaf_ports():
+                                    # send upstream
+                                    self.logger.info("Sending a graft message upstream on IGMP join for src {} dst {}".
+                                            format(ip_src, ip_dst))
+                                    graft_msg = self.frame_graft_msg(ip_src, ip_dst)
+                                    actions = [parser.OFPActionOutput(in_port)]
+                                    out = parser.OFPPacketOut(datapath=datapath, buffer_id=msg.buffer_id,
+                                                              in_port=datapath.ofproto.OFPP_LOCAL,
+                                                              actions=actions,
+                                                              data=graft_msg.data)
+                                    datapath.send_msg(out)
+
+    def _handle_dvmrp(self,msg):
+        datapath = msg.datapath
+        parser = datapath.ofproto_parser
+        in_port = msg.match['in_port']
+        pkt = packet.Packet(msg.data)
+        dpid = datapath.id
+        netnode = self.nodes[dpid]
+        bytes = pkt.protocols[2]
+        (req_dvmrp, s, r) = DVMRP.parser(bytes)
+        self.logger.info("Received a downstream DVMRP msg from port {} for {} {}".format(in_port,
+                        req_dvmrp.src_address, req_dvmrp.grp_address))
+        transmission = (req_dvmrp.src_address, req_dvmrp.grp_address)
+        self.logger.info("Added {} to downstream interest for "
+                         "transmission {}".format(in_port, transmission))
+        if not netnode.downstream_interest.containsValue(transmission, in_port):
+            netnode.downstream_interest.put(transmission, in_port)
+            # Optimization: Modify flow for multicast as soon as downstream interest table
+            # has changes, note that this optimization takes only updates to non-leaf
+            # downstream ports into account and not leaf ports
+            ip_src, ip_dst = transmission
+            actions = []
+            if netnode.downstream_interest.containsKey(transmission):
+                self.logger.info("Updating flow for {} on new dvmrp join.".format(transmission))
+                for outport in netnode.downstream_interest.get(transmission):
+                    actions.append(parser.OFPActionOutput(outport))
+                if netnode.leaf_interest.containsKey(ip_dst):
+                    for outport in netnode.leaf_interest.get(ip_dst):
+                        actions.append(parser.OFPActionOutput(outport))
+            if in_port in netnode.leaf_ports():
+                self.hard_timeout = self.mcast_broadcast_period
+            match = parser.OFPMatch(eth_type=0x800, ipv4_dst=ip_dst,
+                                    ipv4_src=ip_src)
+            self.add_flow(datapath, match, actions, priority=1, tblid=0,
+                          idle=self.idle_timeout, hard_timeout=self.hard_timeout)
+
+        # need to send this join upstream to create tree, note that this also serves as reaffirming continued
+        # interest in the multicast transmission.
+        if netnode.multicast_groups.containsKey(req_dvmrp.grp_address):
+            for transmission in netnode.multicast_groups.get(req_dvmrp.grp_address):
+                if netnode.upstream_reception.containsKey(transmission):
+                    send_port = list(netnode.upstream_reception.get(transmission))[0]
+                    if send_port not in netnode.leaf_ports():
+                        # send upstream
+                        if msg.buffer_id == datapath.ofproto.OFP_NO_BUFFER:
+                            data = msg.data
+                        actions = [parser.OFPActionOutput(send_port)]
+                        out = parser.OFPPacketOut(datapath=datapath, buffer_id=msg.buffer_id,
+                                                  in_port=in_port, actions=actions, data=data)
+                        datapath.send_msg(out)
+                        self.logger.info("Forwarded DVMRP upstream for {} on port {}".
+                                         format((req_dvmrp.src_address, req_dvmrp.grp_address), send_port))
+
+    def _handle_multicast_frame(self,msg,is_igmp,is_dvmrp):
+        datapath = msg.datapath
+        parser = datapath.ofproto_parser
+        in_port = msg.match['in_port']
+        pkt = packet.Packet(msg.data)
+        dpid = datapath.id
+        netnode = self.nodes[dpid]
+        eth = pkt.protocols[0]
+        dst = eth.dst
+        src = eth.src
+        ip_load = pkt.get_protocol(ipv4.ipv4)
+        ip_src = ip_load.src
+        ip_dst = ip_load.dst
+        if msg.buffer_id == datapath.ofproto.OFP_NO_BUFFER:
+            data = msg.data
+        self.logger.info("Received a multicast packet with dst {} from {} on port {}".format(dst,
+                                                                                             src, in_port))
+        if is_igmp or is_dvmrp:
+            self.logger.info("Not going to broadcast igmp or dvmrp")
+            return True
+        elif in_port in netnode.leaf_ports():  # make note only if it comes from leaf port or is broadcast.
+            netnode.upstream_reception.put((ip_src, ip_dst), in_port)
+            netnode.multicast_groups.put(ip_dst, (ip_src, ip_dst))
+            ''' To force refreshing of state of multicast tree have to revert to periodic broadcasts.
+                timestamp is associated with  a multicast flow which is determined by combination of
+                IP src and multicast DST address.
+            '''
+        # two kind of interested parties in this transmission, leaf nodes, downstream nodes.
+        # need to maintains actions for each.
+        actions_leaf = []
+        actions_downstream = []
+        # check if any leaf nodes are interested and in_port is not the same as interested port.
+        if netnode.leaf_interest.containsKey(ip_dst):
+            for outport in netnode.leaf_interest.get(ip_dst):
+                if outport != in_port:
+                    actions_leaf.append(parser.OFPActionOutput(outport))
+        # check if I have any downstream interests, if so append to actions.
+        if netnode.downstream_interest.containsKey((ip_src, ip_dst)):
+            self.logger.info("Found downstream for {}".format((ip_src, ip_dst)))
+            for outport in netnode.downstream_interest.get((ip_src, ip_dst)):
+                actions_downstream.append(parser.OFPActionOutput(outport))
+        # check If it is time to broadcast.
+        curr_time = time.time()
+        ''' possible that this is first time this multicast is seen outside FRB broadcast'''
+        if (ip_src, ip_dst) in netnode.broadcast_timeout.keys():
+            prev_forced_broadcast = netnode.broadcast_timeout[(ip_src, ip_dst)]
+        else:
+            prev_forced_broadcast = None
+        if prev_forced_broadcast is None or curr_time - prev_forced_broadcast > self.mcast_broadcast_period:
+            self.logger.info("Broadcast timeout for {}, will broadcast".format((ip_src, ip_dst)))
+            netnode.broadcast_timeout[(ip_src, ip_dst)] = time.time()
+            # still need to send packets to leaf nodes.
+            actions = actions_leaf
+            if len(actions) != 0:
+                out = parser.OFPPacketOut(datapath=datapath, buffer_id=msg.buffer_id,
+                                          in_port=in_port, actions=actions, data=data)
+                self.logger.info("Sending mcast group pkt {} to leaf port".format(ip_dst))
+                datapath.send_msg(out)
+        else:
+            actions = actions_leaf + actions_downstream
+            # Install a flow rule, if the multicast transmission originates on a leaf node, hard timeout
+            # has to be set to  a lower value to enable packets to come to controller to initiate periodic
+            # broadcasts.
+            if in_port in netnode.leaf_ports():
+                self.hard_timeout = self.mcast_broadcast_period
+            if len(actions) != 0:
+                match = parser.OFPMatch(eth_type=0x800, ipv4_dst=ip_dst, ipv4_src=ip_src)
+                self.add_flow(datapath, match, actions, priority=1, tblid=0,
+                              idle=self.idle_timeout, hard_timeout=self.hard_timeout)
+                # Also send the packet out this time
+                out = parser.OFPPacketOut(datapath=datapath, buffer_id=msg.buffer_id,
+                                          in_port=in_port, actions=actions, data=data)
+                self.logger.info("Sending mcast group pkt {} flow out".format(ip_dst))
+                datapath.send_msg(out)
+                return True  # no need to broadcast
+
+        # Do not broadcast multicast packets received on non leaf ports on a regular channel.
+        if in_port not in netnode.leaf_ports():
+            return True
+        # will have to broadcast
+        return False
     ###################################################################################
     def _monitor(self):
         while True:
@@ -929,23 +970,23 @@ class BoundedFlood(app_manager.RyuApp):
         if not resp:
             self.logger.warning("Request stats operation failed, OFPFlowStatsRequest=%s", req)
 
-    def add_flow(self, datapath, match, actions, priority=0, tblid=0, idle=0, hard_timeout=0):
+    def add_flow(self, datapath, match, actions, priority=0, tblid=0, idle=0,hard_timeout=0):
         try:
             ofproto = datapath.ofproto
             parser = datapath.ofproto_parser
             inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
-            self.logger.info("Datapath %s priority %s table_id %s idle_timeout %s hard_timeout %s \
-                             match %s instructions %s", datapath, priority, tblid, idle,
-                             hard_timeout, match, inst)
+            log_string = "datapath {} priority {} table_id {} idle_timeout {} ".format(datapath, priority, tblid, idle)
+            log_string += " hard_timeout {} match {} instructions {} ".format(hard_timeout, match, inst)
+            self.logger.info(log_string)
             mod = parser.OFPFlowMod(datapath=datapath, priority=priority, table_id=tblid,
-                                    idle_timeout=idle, hard_timeout=hard_timeout, match=match, instructions=inst)
+                                    idle_timeout=idle, hard_timeout=hard_timeout ,match=match, instructions=inst)
             resp = datapath.send_msg(mod)
-            self.logger.info("Response received from add flow request is %s", resp)
+            self.logger.info("Response received from add flow request is {}".format(resp))
             if not resp:
                 self.logger.info("Add flow operation failed, OFPFlowMod=%s", mod)
         except struct.error as err:
             self.logger.info("Add flow operation failed, OFPFlowMod=%s\n struct.error=%s",
-                             mod, err)
+                              mod, err)
 
     def add_flow_drop_multicast(self, datapath, priority=1, tblid=0):
         ofproto = datapath.ofproto
@@ -1102,22 +1143,46 @@ class BoundedFlood(app_manager.RyuApp):
         else:
             self.logger.warning("FRB leaf exchange failed, OFPPacketOut=%s", pkt_out)
 
-    def frame_graft_msg(self, source_address, group_address):
-        p = DVMRP(src_address=source_address, grp_address=group_address)
-        # src and dst MAC addresses do not matter,except dst being a multicast frame..
-        eth = ethernet.ethernet(dst='01:00:5E:0A:0A:0A', src='00:00:00:00:00:00', ethertype=ether.ETH_TYPE_IP)
+    def frame_graft_msg(self,source_address, group_address):
+        dvmrp = DVMRP(src_address=source_address,
+                      grp_address=group_address)
+        # src and dst MAC addresses do not matter.
+        eth = ethernet.ethernet(dst='01:00:5E:0A:0A:0A',
+                                src='00:00:00:00:00:00',
+                                ethertype=ether.ETH_TYPE_IP)
         pkt = packet.Packet()
-        total_length = 20 + DVMRP.min_len
+        total_length = 20 + dvmrp.min_len
         nw_proto = 200 # custom network protocol payload type
         nw_dst = '255.255.255.255'
         nw_src = '0.0.0.0'
-        i = ipv4.ipv4(total_length=total_length, src=nw_src, dst=nw_dst,
+        i = ipv4.ipv4(total_length=total_length,
+                      src=nw_src,
+                      dst=nw_dst,
                       proto=nw_proto)
         pkt.add_protocol(eth)
         pkt.add_protocol(i)
-        pkt.add_protocol(p)
+        pkt.add_protocol(dvmrp)
         pkt.serialize()
         return pkt
+
+    def frame_igmp_query(self):
+        igmp_query = igmp.igmpv3_query(maxresp=igmp.QUERY_RESPONSE_INTERVAL * 10,
+                          csum=0,
+                          address='0.0.0.0')
+        eth = ethernet.ethernet(dst=igmp.MULTICAST_MAC_ALL_HOST,
+                                src='00:00:00:00:00:00',
+                                ethertype=ether.ETH_TYPE_IP)
+        ip = ipv4.ipv4(total_length=len(ipv4.ipv4()) + len(igmp_query),
+                       proto=inet.IPPROTO_IGMP, ttl=1,
+                       src='0.0.0.0',
+                       dst=igmp.MULTICAST_IP_ALL_HOST)
+        pkt = packet.Packet()
+        pkt.add_protocol(eth)
+        pkt.add_protocol(ip)
+        pkt.add_protocol(igmp_query)
+        pkt.serialize()
+        return pkt
+
 
     def handle_bounded_flood_msg(self, datapath, pkt, in_port, msg):
         eth = pkt.protocols[0]
@@ -1134,17 +1199,20 @@ class BoundedFlood(app_manager.RyuApp):
         is_multicast = False
         payload_pkt = packet.Packet(payload)
         pload_eth = payload_pkt.protocols[0]
-        eth_dst = None
-        if pload_eth:
+        try:
             eth_dst = pload_eth.dst
+        except:
+            eth_dst = None
         pload_ip = payload_pkt.get_protocol(ipv4.ipv4)
-        if not eth_dst is None and eth_dst.split(':')[0] == '01':
-            self.logger.info("Received a FRB multicast packet with dst %s from %s on port %s",
-                             eth_dst, pload_eth.src, in_port)
-            self.logger.info("more details: ip dst %s ip src %s", pload_ip.dst, pload_ip.src)
+        if eth_dst is not None and eth_dst.split(':')[0] == '01':
+            self.logger.info("Received a FRB multicast packet with dst {} from {} on port {}".format(eth_dst,
+                             pload_eth.src, in_port))
+            self.logger.info("More details: ip dst {} ip src {}".format(pload_ip.dst, pload_ip.src))
             is_multicast = True
             netnode.upstream_reception.put((pload_ip.src, pload_ip.dst), in_port)
             netnode.multicast_groups.put(pload_ip.dst, (pload_ip.src, pload_ip.dst))
+            # good time to send igmp queries to leaf ports
+            self._send_igmp_query(msg)
             # check if any leaf nodes are interested and in_port is not the same as interested port.
             if netnode.leaf_interest.containsKey(pload_ip.dst):
                 for outport in netnode.leaf_interest.get(pload_ip.dst):
@@ -1156,8 +1224,8 @@ class BoundedFlood(app_manager.RyuApp):
                                                   in_port=in_port, actions=actions, data=data)
                         datapath.send_msg(out)
                         # send out a graft message upstream (because leaf is interested.)
-                        self.logger.info("Sending a graft message upstream for src %s dst %s",
-                                         pload_ip.src, pload_ip.dst)
+                        self.logger.info("Sending a graft message upstream for src {} dst {}".format(pload_ip.src,
+                                                                                                pload_ip.dst))
                         graft_msg = self.frame_graft_msg(pload_ip.src, pload_ip.dst)
                         actions = [parser.OFPActionOutput(in_port)]
                         out = parser.OFPPacketOut(datapath=datapath, buffer_id=msg.buffer_id,
@@ -1219,6 +1287,7 @@ class FloodRouteBound(packet_base.PacketBase):
     ETH_TYPE_BF = 0xc0c0
     FRB_BRDCST = 0
     FRB_LEAF_TX = 1
+
     def __init__(self, root_nid, bound_nid, hop_count, frb_type=0, pl_count=0):
         super(FloodRouteBound, self).__init__()
         self.root_nid = root_nid
@@ -1269,7 +1338,6 @@ class FloodingBounds():
         self._bound_nid = None
         self._hops = None
         self._net_node = net_node
-
 
     def bounds(self, prev_frb=None, exclude_ports=None):
         """
@@ -1411,6 +1479,7 @@ class TrafficAnalyzer():
 DVMRP_TYPE = 0x13
 DVMRP_CODE_GRAFT = 0x8
 
+
 class DVMRP(packet_base.PacketBase):
     """
     __init__ takes the corresponding args in this order.
@@ -1429,9 +1498,8 @@ class DVMRP(packet_base.PacketBase):
     _PACK_STR = '!BBH4s4s'
     _MIN_LEN = struct.calcsize(_PACK_STR)
 
-
     def __init__(self, msgtype=DVMRP_TYPE, code=DVMRP_CODE_GRAFT, csum=0,
-                 src_address='0.0.0.0', grp_address='224.0.0.1'):
+                 src_address='0.0.0.0',grp_address='224.0.0.1'):
         super(DVMRP, self).__init__()
         self.msgtype = msgtype
         self.code = code
