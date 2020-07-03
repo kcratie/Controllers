@@ -28,7 +28,7 @@ from controller.framework.CFx import CFX
 def is_tincan_proc():
     # Iterates across process table to find Tincan process
     for process in psutil.process_iter():
-        if process.name().find("ipop-tincan") != -1:
+        if process.name().find("tincan") != -1:
             return True
     return False
 

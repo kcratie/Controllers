@@ -49,8 +49,8 @@ class Logger(ControllerModule):
         elif self._cm_config["Device"] == "File":
             # Extracts the filepath else sets logs to current working directory
             filepath = self._cm_config.get("Directory", "./")
-            fqname = filepath + \
-                self._cm_config.get("CtrlLogFileName", "ctrl.log")
+            fqname = os.path.join(filepath,
+                                  self._cm_config.get("CtrlLogFileName", "ctrl.log"))
             if not os.path.exists(filepath):
                 os.makedirs(filepath, exist_ok=True)
             if os.path.isfile(fqname):
@@ -82,8 +82,8 @@ class Logger(ControllerModule):
 
             # Extracts the filepath else sets logs to current working directory
             filepath = self._cm_config.get("Directory", "./")
-            fqname = filepath + \
-                self._cm_config.get("CtrlLogFileName", "ctrl.log")
+            fqname = os.path.join(filepath,
+                                  self._cm_config.get("CtrlLogFileName", "ctrl.log"))
             if not os.path.exists(filepath):
                 os.makedirs(filepath, exist_ok=True)
             if os.path.isfile(fqname):

@@ -30,7 +30,7 @@ from controller.modules.NetworkBuilder import EdgeRequest
 from controller.modules.NetworkBuilder import EdgeResponse
 from controller.modules.NetworkBuilder import EdgeNegotiate
 from controller.modules.GraphBuilder import GraphBuilder
-from controller.framework.ipoplib import RemoteAction
+from controller.framework.Modlib import RemoteAction
 #import controller.modules.NetworkGraph as ng
 
 class DiscoveredPeer():

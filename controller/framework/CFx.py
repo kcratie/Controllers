@@ -27,7 +27,7 @@ import threading
 import time
 import importlib
 import uuid
-import controller.framework.fxlib as fxlib
+import controller.framework.Fxlib as fxlib
 from controller.framework.CFxHandle import CFxHandle
 from controller.framework.CFxSubscription import CFxSubscription
 

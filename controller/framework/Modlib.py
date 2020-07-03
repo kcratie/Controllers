@@ -258,7 +258,12 @@ def getchecksum(hexstr):
 
 def runshell(cmd):
     """ Run a shell command """
-    return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    #print(cmd)
+    return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+
+def create_process(cmdlist):
+    """ Run a shell command """
+    return subprocess.Popen(cmdlist)
 
 class RemoteAction():
     def __init__(self, overlay_id, recipient_id, recipient_cm, action, params,

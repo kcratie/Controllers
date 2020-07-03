@@ -19,9 +19,9 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 # THE SOFTWARE.
 
-IPOP_VER_MJR = "19"
-IPOP_VER_MNR = "11"
-IPOP_VER_REV = "01"
+IPOP_VER_MJR = "20"
+IPOP_VER_MNR = "7"
+IPOP_VER_REV = "2"
 IPOP_VER_REL = "{0}.{1}.{2}".format(IPOP_VER_MJR, IPOP_VER_MNR, IPOP_VER_REV)
 
 CONFIG = {
@@ -77,7 +77,7 @@ CONFIG = {
     "Topology": {
         "Enabled": True,
         "TimerInterval": 30,
-        "PeerDiscoveryCoalesce": 3,
+        "PeerDiscoveryCoalesce": 1,
         "ExclusionBaseInterval": 240,
         "MaxSuccessors": 2,
         "MaxOnDemandEdges": 1,

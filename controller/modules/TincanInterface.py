@@ -28,7 +28,7 @@ except ImportError:
 from threading import Thread
 import traceback
 from distutils import spawn
-import controller.framework.ipoplib as ipoplib
+import controller.framework.Modlib as modlib
 from controller.framework.ControllerModule import ControllerModule
 
 
@@ -87,7 +87,7 @@ class TincanInterface(ControllerModule):
     def create_control_link(self,):
         self.register_cbt("Logger", "LOG_INFO", "Creating Tincan control link")
         cbt = self.create_cbt(self._module_name, self._module_name, "TCI_CREATE_CTRL_LINK")
-        ctl = ipoplib.CTL_CREATE_CTRL_LINK
+        ctl = modlib.CTL_CREATE_CTRL_LINK
         ctl["IPOP"]["TransactionId"] = cbt.tag
         if self._cm_config["CtrlRecvPort"] is not None:
             ctl["IPOP"]["Request"]["Port"] = self._cm_config["CtrlRecvPort"]
@@ -105,7 +105,7 @@ class TincanInterface(ControllerModule):
 
     def configure_tincan_logging(self, log_cfg, use_defaults=False):
         cbt = self.create_cbt(self._module_name, self._module_name, "TCI_CONFIGURE_LOGGING")
-        ctl = ipoplib.CTL_CONFIGURE_LOGGING
+        ctl = modlib.CTL_CONFIGURE_LOGGING
         ctl["IPOP"]["TransactionId"] = cbt.tag
         if not use_defaults:
             ctl["IPOP"]["Request"]["Level"] = log_cfg["LogLevel"]
@@ -125,7 +125,7 @@ class TincanInterface(ControllerModule):
 
     def req_handler_create_link(self, cbt):
         msg = cbt.request.params
-        ctl = ipoplib.CTL_CREATE_LINK
+        ctl = modlib.CTL_CREATE_LINK
         ctl["IPOP"]["TransactionId"] = cbt.tag
         req = ctl["IPOP"]["Request"]
         req["OverlayId"] = msg["OverlayId"]
@@ -146,7 +146,7 @@ class TincanInterface(ControllerModule):
 
     def req_handler_create_tunnel(self, cbt):
         msg = cbt.request.params
-        ctl = ipoplib.CTL_CREATE_TUNNEL
+        ctl = modlib.CTL_CREATE_TUNNEL
         ctl["IPOP"]["TransactionId"] = cbt.tag
         req = ctl["IPOP"]["Request"]
         req["StunServers"] = msg["StunServers"]
@@ -161,7 +161,7 @@ class TincanInterface(ControllerModule):
 
     def req_handler_query_candidate_address_set(self, cbt):
         msg = cbt.request.params
-        ctl = ipoplib.CTL_QUERY_CAS
+        ctl = modlib.CTL_QUERY_CAS
         ctl["IPOP"]["TransactionId"] = cbt.tag
         req = ctl["IPOP"]["Request"]
         req["OverlayId"] = msg["OverlayId"]
@@ -170,7 +170,7 @@ class TincanInterface(ControllerModule):
 
     def req_handler_query_link_stats(self, cbt):
         msg = cbt.request.params
-        ctl = ipoplib.CTL_QUERY_LINK_STATS
+        ctl = modlib.CTL_QUERY_LINK_STATS
         ctl["IPOP"]["TransactionId"] = cbt.tag
         req = ctl["IPOP"]["Request"]
         req["TunnelIds"] = msg
@@ -178,7 +178,7 @@ class TincanInterface(ControllerModule):
 
     def req_handler_query_tunnel_info(self, cbt):
         msg = cbt.request.params
-        ctl = ipoplib.CTL_QUERY_TUNNEL_INFO
+        ctl = modlib.CTL_QUERY_TUNNEL_INFO
         ctl["IPOP"]["TransactionId"] = cbt.tag
         req = ctl["IPOP"]["Request"]
         req["OverlayId"] = msg["OverlayId"]
@@ -186,18 +186,18 @@ class TincanInterface(ControllerModule):
 
     def req_handler_remove_tunnel(self, cbt):
         msg = cbt.request.params
-        ctl = ipoplib.CTL_REMOVE_TUNNEL
+        ctl = modlib.CTL_REMOVE_TUNNEL
         ctl["IPOP"]["TransactionId"] = cbt.tag
         req = ctl["IPOP"]["Request"]
         req["OverlayId"] = msg["OverlayId"]
         req["TunnelId"] = msg["TunnelId"]
         self.send_control(json.dumps(ctl))
         if "TapName" in msg and msg["TapName"]:
-            ipoplib.runshell([self.iptool, "link", "del", "dev", msg["TapName"]])
+            modlib.runshell([self.iptool, "link", "del", "dev", msg["TapName"]])
 
     def req_handler_remove_link(self, cbt):
         msg = cbt.request.params
-        ctl = ipoplib.CTL_REMOVE_LINK
+        ctl = modlib.CTL_REMOVE_LINK
         ctl["IPOP"]["TransactionId"] = cbt.tag
         req = ctl["IPOP"]["Request"]
         req["OverlayId"] = msg["OverlayId"]
