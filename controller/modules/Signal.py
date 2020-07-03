@@ -22,6 +22,7 @@
 import ssl
 import time
 import threading
+import os
 from queue import Queue
 try:
     import simplejson as json
@@ -88,6 +89,9 @@ class XmppTransport(sleekxmpp.ClientXMPP):
         self._cbt_to_action_tag = {}  # maps remote action tags to cbt tags
         self._host = None
         self._port = None
+        # TLS enabled by default.
+        self._enable_tls = True
+        self._enable_ssl = False
 
     @staticmethod
     def factory(overlay_id, overlay_descr, cm_mod, presence_publisher, jid_cache,
@@ -111,9 +115,12 @@ class XmppTransport(sleekxmpp.ClientXMPP):
             transport = XmppTransport(None, None, sasl_mech="EXTERNAL")
             transport.ssl_version = ssl.PROTOCOL_TLSv1
             transport.ca_certs = overlay_descr["TrustStore"]
-            transport.certfile = overlay_descr["CertDirectory"] + overlay_descr["CertFile"]
-            transport.keyfile = overlay_descr["CertDirectory"] + overlay_descr["Keyfile"]
-            transport.use_tls = True
+            # In case server is trusted and its self signed certificate is acceptable.
+            if transport.ca_certs=="":
+                transport.ca_certs = None
+            transport.certfile = os.path.join(overlay_descr["CertDirectory"], overlay_descr["CertFile"])
+            transport.keyfile = os.path.join(overlay_descr["CertDirectory"], overlay_descr["KeyFile"])
+            transport._enable_ssl = True
         elif auth_method == "PASSWORD":
             if user is None:
                 raise RuntimeError("No username is provided in IPOP configuration file.")
@@ -129,7 +136,6 @@ class XmppTransport(sleekxmpp.ClientXMPP):
                         cm_mod.sig_log("Failed to store password in keyring. {0}".format(str(err)),
                                        "LOG_ERROR")
             transport = XmppTransport(user, pswd, sasl_mech="PLAIN")
-            transport.use_tls = True
             del pswd
         else:
             raise RuntimeError("Invalid authentication method specified in configuration: {0}"
@@ -264,7 +270,7 @@ class XmppTransport(sleekxmpp.ClientXMPP):
 
     def connect_to_server(self,):
         try:
-            if self.connect(address=(self._host, self._port)):
+            if self.connect(address=(self._host, self._port),use_ssl=self._enable_ssl,use_tls=self._enable_tls):
                 self.process(block=False)
                 self._sig.sig_log("Starting overlay {0} connection to XMPP server {1}:{2}"
                                   .format(self._overlay_id, self._host, self._port))

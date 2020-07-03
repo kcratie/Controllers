@@ -32,6 +32,10 @@ from distutils import spawn
 import os
 import subprocess
 import logging
+from collections.abc import MutableSet
+import random
+import time
+import math
 import logging.handlers as lh
 from collections.abc import MutableSet
 import random
@@ -56,6 +60,7 @@ from ryu.lib import addrconv
 from ryu.lib.packet import packet_utils
 
 CONF = cfg.CONF # RYU environment
+
 
 
 def runcmd(cmd):
@@ -568,6 +573,12 @@ class BoundedFlood(app_manager.RyuApp):
             self.config = json.loads(CONF["bf"]["config_string"])
         else:
             raise RuntimeError("No valid configuration found")
+
+    def _find_protocol(self, pkt, name):
+        for p in pkt.protocols:
+            if hasattr(p, 'protocol_name'):
+                if p.protocol_name == name:
+                    return p
 
     def _find_protocol(self, pkt, name):
         for p in pkt.protocols:
